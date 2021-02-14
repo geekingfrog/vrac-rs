@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+
+  <head>
+    <title>Generate a link</title>
+<style>
+body {
+  max-width: 40rem;
+  margin: 2rem auto;
+}
+</style>
+  </head>
+
+  <body>
+    <form action="/gen" method="POST">
+
+      <div>
+        <label for="path">Path</label>
+        <input name="path" id="path" type="text" size="12" maxLength="12" spellcheck="no" required>
+      </div>
+
+      <hr>
+
+      <div>
+        <p>Max size:</p>
+        <input type="radio" name="max-size" value="1MB" id="max-size-1MB">
+        <label for="max-size-1MB">1 MB</label>
+        <input type="radio" name="max-size" value="10MB" id="max-size-10MB" checked>
+        <label for="max-size-10MB">10 MB</label>
+        <input type="radio" name="max-size" value="200MB" id="max-size-200MB">
+        <label for="max-size-200MB">200 MB</label>
+        <input type="radio" name="max-size" value="1GB" id="max-size-1GB">
+        <label for="max-size-1GB">1 GB</label>
+        <input type="radio" name="max-size" value="5GB" id="max-size-5GB">
+        <label for="max-size-5GB">5 GB</label>
+        <input type="radio" name="max-size" value="Unlimited" id="max-size-unlimited">
+        <label for="max-size-unlimited">Unlimited</label>
+      </div>
+
+      <hr>
+
+      <div>
+        <p>Content expires after:</p>
+        <input type="radio" name="expires" value="1Hour" id="expires-1h">
+        <label for="expires-1h">1 hour</label>
+        <input type="radio" name="expires" value="1Day" id="expires-1d" checked>
+        <label for="expires-1d">1 day</label>
+        <input type="radio" name="expires" value="1Week" id="expires-1w">
+        <label for="expires-1w">1 week</label>
+        <input type="radio" name="expires" value="1Month" id="expires-1m">
+        <label for="expires-1m">1 month</label>
+        <input type="radio" name="expires" value="DoesntExpire" id="expires-not">
+        <label for="expires-not">Doesn't expire</label>
+      </div>
+
+      <hr>
+
+      <div>
+        <p>Link valid for</p>
+        <input type="radio" name="valid-for" value="1Hour" id="valid-for-1h">
+        <label for="valid-for-1h">1 hour</label>
+        <input type="radio" name="valid-for" value="1Day" id="valid-for-1d" checked>
+        <label for="valid-for-1d">1 day</label>
+        <input type="radio" name="valid-for" value="1Week" id="valid-for-1w">
+        <label for="valid-for-1w">1 week</label>
+        <input type="radio" name="valid-for" value="1Month" id="valid-for-1m">
+        <label for="valid-for-1m">1 month</label>
+      </div>
+
+      <hr>
+
+      <div>
+        <button type="submit">OK</button>
+      </div>
+    </form>
+  </body>
+
+</html>

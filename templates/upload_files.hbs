@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+
+  <head>
+    <title>Upload some files</title>
+<style>
+body {
+  max-width: 40rem;
+  margin: 2rem auto;
+}
+</style>
+  </head>
+
+  <body>
+    <p>
+    {{#if max_size_in_mb}}
+    Here, you can upload some files, for a total of up to {{max_size_in_mb}} MB.
+    {{else}}
+    Here, you can upload some files.
+    {{/if}}
+    </p>
+
+    <form action="{{form_action}}" method="POST">
+      <input type="file">
+      <p>
+        <button type="submit">Upload</button>
+      </p>
+    </form>
+  </body>
+
+</html>

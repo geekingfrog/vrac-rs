@@ -12,7 +12,9 @@ pub enum Error {
 
 #[derive(Debug)]
 pub enum VracError {
-    DuplicateToken(String)
+    DuplicateToken(String),
+    PayloadTooLarge(u64),
+    Panic(String),
 }
 
 impl From<rusqlite::Error> for Error {

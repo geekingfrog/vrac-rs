@@ -8,19 +8,21 @@ use crate::errors;
 
 #[derive(Debug)]
 pub struct Token {
-    id: u32,
-    path: String,
-    status: TokenStatus,
-    max_size_in_bytes: Option<i32>,
-    created_at: NaiveDateTime,
-    expires_at: Option<NaiveDateTime>,
-    deleted_at: Option<NaiveDateTime>,
+    pub id: u32,
+    pub path: String,
+    pub status: TokenStatus,
+    pub max_size_in_mb: Option<u32>,
+    pub created_at: NaiveDateTime,
+    pub token_expires_at: NaiveDateTime,
+    pub content_expires_at: Option<NaiveDateTime>,
+    pub deleted_at: Option<NaiveDateTime>,
 }
 
 pub struct CreateToken {
     pub path: String,
-    pub max_size_in_bytes: Option<i32>,
-    pub expires_at: Option<NaiveDateTime>,
+    pub max_size_in_mb: Option<u32>,
+    pub token_expires_at: Option<NaiveDateTime>,
+    pub content_expires_at: NaiveDateTime,
 }
 
 #[derive(Debug)]
@@ -81,7 +83,7 @@ pub trait VracPersistence {
     fn init_db(&self) -> Result<(), errors::Error>;
     fn create_token(&self, token: &CreateToken) -> Result<Token, errors::Error>;
     fn get_token_by_id(&self, token_id: u32) -> Result<Option<Token>, errors::Error>;
-    fn get_valid_token_by_path(&self, path: String) -> Result<Option<Token>, errors::Error>;
+    fn get_valid_token_by_path(&self, path: &str) -> Result<Option<Token>, errors::Error>;
 }
 
 #[derive(Debug, Clone)]
@@ -112,7 +114,8 @@ impl VracPersistence for DB {
                 status TEXT NOT NULL,
                 max_size INTEGER,
                 created_at DATETIME NOT NULL DEFAULT (datetime('now')),
-                expires_at DATETIME,
+                token_expires_at DATETIME NOT NULL,
+                content_expires_at DATETIME,
                 deleted_at DATETIME
                 )",
             rusqlite::params![],
@@ -128,11 +131,12 @@ impl VracPersistence for DB {
         {
             let conn = self.open()?;
             let n = conn.execute_named(
-                "INSERT INTO token (path, status, max_size, expires_at) SELECT :path, :status, :max_size, :expires_at WHERE NOT EXISTS(SELECT 1 FROM token where path = :path AND (status = :status_fresh OR status = :status_used) AND deleted_at IS NULL)",
+                "INSERT INTO token (path, status, max_size, content_expires_at, token_expires_at) SELECT :path, :status, :max_size, :content_expires_at, :token_expires_at WHERE NOT EXISTS(SELECT 1 FROM token where path = :path AND (status = :status_fresh OR status = :status_used) AND deleted_at IS NULL)",
                 &[  (":path", &tok.path),
                     (":status", &TokenStatus::Fresh),
-                    (":max_size", &tok.max_size_in_bytes),
-                    (":expires_at", &tok.expires_at),
+                    (":max_size", &tok.max_size_in_mb),
+                    (":content_expires_at", &tok.content_expires_at),
+                    (":token_expires_at", &tok.token_expires_at),
                     (":status_fresh", &TokenStatus::Fresh),
                     (":status_used", &TokenStatus::Used),
                 ],
@@ -153,7 +157,7 @@ impl VracPersistence for DB {
 
     fn get_token_by_id(&self, token_id: u32) -> Result<Option<Token>, errors::Error> {
         let conn = self.open()?;
-        let mut stmt = conn.prepare("SELECT id, path, status, max_size, created_at, expires_at, deleted_at FROM token WHERE id = ?1 AND deleted_at IS NULL")?;
+        let mut stmt = conn.prepare("SELECT id, path, status, max_size, created_at, content_expires_at, token_expires_at, deleted_at FROM token WHERE id = ?1 AND deleted_at IS NULL")?;
         let mut result_iter = stmt.query_map(rusqlite::params![token_id], token_from_row)?;
 
         match result_iter.next() {
@@ -165,9 +169,9 @@ impl VracPersistence for DB {
         }
     }
 
-    fn get_valid_token_by_path(&self, token_path: String) -> Result<Option<Token>, errors::Error> {
+    fn get_valid_token_by_path(&self, token_path: &str) -> Result<Option<Token>, errors::Error> {
         let conn = self.open()?;
-        let mut stmt = conn.prepare("SELECT id, path, status, max_size, created_at, expires_at, deleted_at FROM token WHERE path = ?1 AND (status = ?2 OR status = ?3) AND deleted_at IS NULL")?;
+        let mut stmt = conn.prepare("SELECT id, path, status, max_size, created_at, content_expires_at, token_expires_at, deleted_at FROM token WHERE path = ?1 AND (status = ?2 OR status = ?3) AND deleted_at IS NULL")?;
         let mut result_iter = stmt.query_map(rusqlite::params![token_path, TokenStatus::Fresh, TokenStatus::Used], token_from_row)?;
 
         match result_iter.next() {
@@ -185,9 +189,10 @@ fn token_from_row(row: &rusqlite::Row) -> rusqlite::Result<Token> {
         id: row.get(0)?,
         path: row.get(1)?,
         status: row.get(2)?,
-        max_size_in_bytes: row.get(3)?,
+        max_size_in_mb: row.get(3)?,
         created_at: row.get(4)?,
-        expires_at: row.get(5)?,
-        deleted_at: row.get(6)?,
+        content_expires_at: row.get(5)?,
+        token_expires_at: row.get(6)?,
+        deleted_at: row.get(7)?,
     })
 }
