@@ -6,8 +6,8 @@ use chrono::Duration;
 pub struct Token {
     pub path: String,
     pub max_size_in_mb: Quantity<u32>,
-    pub content_expires_after: Duration,
-    pub token_valid_for: Quantity<Duration>,
+    pub content_expires_after: Quantity<Duration>,
+    pub token_valid_for: Duration,
 }
 
 /// isomorphic to Option<T>, represent a quantity that may not have an upper bound
@@ -53,12 +53,12 @@ fn parse_token_(form: HashMap<String, String>) -> Result<Token, String> {
     let content_expires_after = form
         .get("expires")
         .ok_or("Missing expires".to_string())
-        .and_then(parse_duration)?;
+        .and_then(parse_expires)?;
 
     let token_valid_for = form
         .get("valid-for")
         .ok_or("Missing valid-for".to_string())
-        .and_then(parse_valid_for)?;
+        .and_then(parse_duration)?;
 
     Ok(Token {
         path,
@@ -95,12 +95,14 @@ fn parse_duration(raw: &String) -> Result<Duration, String> {
         Ok(Duration::weeks(1))
     } else if raw == "1Month" {
         Ok(Duration::days(31))
+    } else if raw == "DoesntExpire" {
+        todo!()
     } else {
         Err(format!("cannot parse Duration from {}", raw))
     }
 }
 
-fn parse_valid_for(raw: &String) -> Result<Quantity<Duration>, String> {
+fn parse_expires(raw: &String) -> Result<Quantity<Duration>, String> {
     if raw == "DoesntExpire" {
         Ok(Quantity::Unbounded)
     } else {

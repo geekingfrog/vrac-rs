@@ -7,16 +7,22 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-warp = "0.2"
-tokio = { version = "0.2", features = ["macros", "rt-threaded"] }
+warp = "0.3"
+tokio = { version = "1.0.2", features = ["full"] }
 http = "0.2.1"
 bytes = "0.5"
 log = "0.4"
 pretty_env_logger = "0.4"
-rusqlite = { version = "0.22", features = ["chrono"] }
+diesel = { version = "1.4.5", features = ["sqlite", "chrono"] }
+diesel_migrations = "1.4.0"
 chrono = "0.4.11"
-handlebars = "3.0"
+handlebars = "3.5"
 serde = { version = "1.0.106", features = ["derive"] }
+anyhow = "1.0.38"
+tide = "0.16.0"
+async-std = { version = "1.9.0", features = ["attributes"] }
+http-types = "2.10.0"
+
 
 # warp
 # rusqlite
