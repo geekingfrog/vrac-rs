@@ -16,24 +16,24 @@ body {
 
       <div>
         <label for="path">Path</label>
-        <input name="path" id="path" type="text" size="12" maxLength="12" spellcheck="no" required>
+        <input name="path" id="path" type="text" size="12" maxLength="12" spellcheck="no" required value="coucou">
       </div>
 
       <hr>
 
       <div>
         <p>Max size:</p>
-        <input type="radio" name="max-size" value="1MB" id="max-size-1MB">
+        <input type="radio" name="max-size" value="1" id="max-size-1MB">
         <label for="max-size-1MB">1 MB</label>
-        <input type="radio" name="max-size" value="10MB" id="max-size-10MB" checked>
+        <input type="radio" name="max-size" value="10" id="max-size-10MB" checked>
         <label for="max-size-10MB">10 MB</label>
-        <input type="radio" name="max-size" value="200MB" id="max-size-200MB">
+        <input type="radio" name="max-size" value="200" id="max-size-200MB">
         <label for="max-size-200MB">200 MB</label>
-        <input type="radio" name="max-size" value="1GB" id="max-size-1GB">
+        <input type="radio" name="max-size" value="1024" id="max-size-1GB">
         <label for="max-size-1GB">1 GB</label>
-        <input type="radio" name="max-size" value="5GB" id="max-size-5GB">
+        <input type="radio" name="max-size" value="5120" id="max-size-5GB">
         <label for="max-size-5GB">5 GB</label>
-        <input type="radio" name="max-size" value="Unlimited" id="max-size-unlimited">
+        <input type="radio" name="max-size" value="None" id="max-size-unlimited">
         <label for="max-size-unlimited">Unlimited</label>
       </div>
 
@@ -41,15 +41,15 @@ body {
 
       <div>
         <p>Content expires after:</p>
-        <input type="radio" name="expires" value="1Hour" id="expires-1h">
+        <input type="radio" name="content-expires" value="1" id="expires-1h">
         <label for="expires-1h">1 hour</label>
-        <input type="radio" name="expires" value="1Day" id="expires-1d" checked>
+        <input type="radio" name="content-expires" value="24" id="expires-1d" checked>
         <label for="expires-1d">1 day</label>
-        <input type="radio" name="expires" value="1Week" id="expires-1w">
+        <input type="radio" name="content-expires" value="168" id="expires-1w">
         <label for="expires-1w">1 week</label>
-        <input type="radio" name="expires" value="1Month" id="expires-1m">
+        <input type="radio" name="content-expires" value="5208" id="expires-1m">
         <label for="expires-1m">1 month</label>
-        <input type="radio" name="expires" value="DoesntExpire" id="expires-not">
+        <input type="radio" name="content-expires" value="None" id="expires-not">
         <label for="expires-not">Doesn't expire</label>
       </div>
 
@@ -57,13 +57,13 @@ body {
 
       <div>
         <p>Link valid for</p>
-        <input type="radio" name="valid-for" value="1Hour" id="valid-for-1h">
+        <input type="radio" name="link-valid-for" value="1" id="valid-for-1h">
         <label for="valid-for-1h">1 hour</label>
-        <input type="radio" name="valid-for" value="1Day" id="valid-for-1d" checked>
+        <input type="radio" name="link-valid-for" value="24" id="valid-for-1d" checked>
         <label for="valid-for-1d">1 day</label>
-        <input type="radio" name="valid-for" value="1Week" id="valid-for-1w">
+        <input type="radio" name="link-valid-for" value="168" id="valid-for-1w">
         <label for="valid-for-1w">1 week</label>
-        <input type="radio" name="valid-for" value="1Month" id="valid-for-1m">
+        <input type="radio" name="link-valid-for" value="5208" id="valid-for-1m">
         <label for="valid-for-1m">1 month</label>
       </div>
 

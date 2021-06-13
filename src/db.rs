@@ -2,10 +2,11 @@ use anyhow::{Context, Result};
 use chrono::naive::NaiveDateTime;
 use chrono::Utc;
 // use std::fmt;
+use tokio::sync::{mpsc, oneshot};
 
 use diesel::{
     backend::Backend, deserialize::FromSql, prelude::*, serialize::ToSql, sql_types,
-    sql_types::Text, Connection, SqliteConnection,
+    sql_types::Text, Connection, Insertable, Queryable, SqliteConnection,
 };
 
 use crate::schema::token::{self, dsl};
@@ -24,6 +25,7 @@ pub struct Token {
     pub deleted_at: Option<NaiveDateTime>,
 }
 
+#[derive(Debug)]
 pub struct CreateToken {
     pub path: String,
     pub max_size_in_mb: Option<u32>,
@@ -106,7 +108,7 @@ pub trait VracPersistence {
 
 #[derive(Debug, Clone)]
 pub struct DB {
-    db_path: String,
+    pub db_path: String,
 }
 
 impl DB {
@@ -140,7 +142,9 @@ impl VracPersistence for DB {
         //     .select(diesel::dsl::count_star())
         //     .first(&conn)?;
 
-        let existing_count: i64 = token::table.select(diesel::dsl::count_star()).first(&conn)?;
+        let existing_count: i64 = token::table
+            .select(diesel::dsl::count_star())
+            .first(&conn)?;
         if existing_count > 0 {
             bail!("A valid token already exists for this path")
         };
@@ -169,6 +173,196 @@ impl VracPersistence for DB {
                 Ok(inserted_token)
             }
         })
+    }
+}
+
+type Responder<T> = oneshot::Sender<Result<T>>;
+
+#[derive(Debug)]
+pub enum Command {
+    CreateToken {
+        token: CreateToken,
+        resp: Responder<Token>,
+    },
+    GetValidToken {
+        token_path: String, // figure out if it's possible to have a borrowed version
+        resp: Responder<Option<Token>>,
+    },
+}
+
+pub struct DBHandler {
+    cmd_chan: mpsc::Sender<Command>,
+}
+
+impl DBHandler {
+    pub async fn create_token(&self, tok: CreateToken) -> Result<Token> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let cmd = Command::CreateToken {
+            token: tok,
+            resp: resp_tx,
+        };
+        self.cmd_chan.send(cmd).await?;
+        let result_token = resp_rx.await?;
+        result_token
+    }
+
+    pub async fn get_valid_token(&self, token_path: &str) -> Result<Option<Token>> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let cmd = Command::GetValidToken {
+            token_path: token_path.to_string(),
+            resp: resp_tx,
+        };
+        self.cmd_chan.send(cmd).await?;
+        let result_token = resp_rx.await?;
+        result_token
+    }
+
+    // pub fn handle_command(&self, cmd: Command) {
+    //     match cmd {
+    //         Command::CreateToken { token, resp } => {
+    //             let result = self.handle_create_token(token);
+    //             let _ = resp.send(result);
+    //         }
+    //     }
+    // }
+
+    // fn handle_create_token(&self, tok: CreateToken) -> Result<Token> {
+    //     let conn = self.open()?;
+    //
+    //     // let existing_token = dsl::token
+    //     //     .filter(dsl::status.eq_any(vec![TokenStatus::Fresh, TokenStatus::Used]))
+    //     //     .filter(dsl::path.eq(&tok.path))
+    //     //     .select(diesel::dsl::count_star())
+    //     //     .first(&conn)?;
+    //
+    //     let existing_count: i64 = token::table
+    //         .select(diesel::dsl::count_star())
+    //         .first(&conn)?;
+    //     if existing_count > 0 {
+    //         bail!("A valid token already exists for this path")
+    //     };
+    //
+    //     let sql_tok = CreateTokenSQLite {
+    //         path: tok.path,
+    //         status: TokenStatus::Fresh,
+    //         max_size: tok.max_size_in_mb.map(|s| s as _),
+    //         created_at: Utc::now().naive_utc(),
+    //         token_expires_at: tok.token_expires_at,
+    //         content_expires_at: tok.content_expires_at,
+    //         deleted_at: None,
+    //     };
+    //
+    //     conn.transaction::<_, anyhow::Error, _>(|| {
+    //         let n_inserted = diesel::insert_into(token::table)
+    //             .values(&sql_tok)
+    //             .execute(&conn)
+    //             .with_context(|| format!("Cannot insert {:?} into token table", &sql_tok))?;
+    //
+    //         println!("inserted returned: {:#?}", n_inserted);
+    //         if n_inserted == 0 {
+    //             Err(anyhow!("Didn't insert token: {:?}", sql_tok))
+    //         } else {
+    //             let inserted_token = token::table.order(token::id.desc()).first(&conn)?;
+    //             Ok(inserted_token)
+    //         }
+    //     })
+    // }
+
+    // fn open(&self) -> Result<SqliteConnection> {
+    //     SqliteConnection::establish(&self.db_path)
+    //         .context(format!("Cannot connect to db at {}", &self.db_path))
+    // }
+}
+
+pub fn init_db(db_path: String) -> (DBHandler, DBManager) {
+    let (cmd_tx, cmd_rx) = mpsc::channel(8);
+    (
+        DBHandler { cmd_chan: cmd_tx },
+        DBManager {
+            db_path,
+            cmd_chan: cmd_rx,
+        },
+    )
+}
+
+pub struct DBManager {
+    pub db_path: String,
+    cmd_chan: mpsc::Receiver<Command>,
+}
+
+impl DBManager {
+    pub async fn run(mut self) -> Result<()> {
+        tokio::spawn(async move {
+            while let Some(cmd) = self.cmd_chan.recv().await {
+                match cmd {
+                    Command::CreateToken { token, resp } => {
+                        let result = self.create_token(token);
+                        let _ = resp.send(result);
+                    },
+                    Command::GetValidToken {token_path, resp } => {
+                        let result = self.get_valid_token(token_path);
+                        let _ = resp.send(result);
+                    },
+                }
+            }
+        })
+        .await?;
+        Ok(())
+    }
+
+    pub fn create_token(&self, token: CreateToken) -> Result<Token> {
+        let conn = self.open()?;
+
+        // there should be at most one token with a given path in status fresh or used.
+        let existing_count: i64 = token::table
+            .select(diesel::dsl::count_star())
+            .filter(token::path.eq(&token.path))
+            .filter(token::status.eq_any(vec![TokenStatus::Fresh, TokenStatus::Used]))
+            .first(&conn)?;
+
+        if existing_count > 0 {
+            bail!("A valid token already exists for this path")
+        };
+
+        let sql_tok = CreateTokenSQLite {
+            path: token.path,
+            status: TokenStatus::Fresh,
+            max_size: token.max_size_in_mb.map(|s| s as _),
+            created_at: Utc::now().naive_utc(),
+            token_expires_at: token.token_expires_at,
+            content_expires_at: token.content_expires_at,
+            deleted_at: None,
+        };
+
+        conn.transaction::<_, anyhow::Error, _>(|| {
+            let n_inserted = diesel::insert_into(token::table)
+                .values(&sql_tok)
+                .execute(&conn)
+                .with_context(|| format!("Cannot insert {:?} into token table", &sql_tok))?;
+
+            println!("inserted returned: {:#?}", n_inserted);
+            if n_inserted == 0 {
+                Err(anyhow!("Didn't insert token: {:?}", sql_tok))
+            } else {
+                let inserted_token = token::table.order(token::id.desc()).first(&conn)?;
+                Ok(inserted_token)
+            }
+        })
+    }
+
+    pub fn get_valid_token(&self, token_path: String) -> Result<Option<Token>> {
+        let conn = self.open()?;
+        // there should be at most one token with a given path in status fresh or used.
+        let tok: Vec<Token> = token::table
+                .filter(token::path.eq(token_path))
+                .filter(token::status.eq_any(vec![TokenStatus::Fresh, TokenStatus::Used]))
+                .load(&conn)?;
+        Ok(tok.into_iter().next())
+    }
+
+    fn open(&self) -> Result<SqliteConnection> {
+        SqliteConnection::establish(&self.db_path)
+            .context(format!("Cannot connect to db at {}", &self.db_path))
     }
 }
 

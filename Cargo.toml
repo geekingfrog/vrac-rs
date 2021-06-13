@@ -10,7 +10,7 @@ edition = "2018"
 warp = "0.3"
 tokio = { version = "1.0.2", features = ["full"] }
 http = "0.2.1"
-bytes = "0.5"
+bytes = "1.0.1"
 log = "0.4"
 pretty_env_logger = "0.4"
 diesel = { version = "1.4.5", features = ["sqlite", "chrono"] }
@@ -22,6 +22,11 @@ anyhow = "1.0.38"
 tide = "0.16.0"
 async-std = { version = "1.9.0", features = ["attributes"] }
 http-types = "2.10.0"
+serde_urlencoded = "0.7.0"
+tide-handlebars = "0.9.0"
+futures = "0.3.13"
+pin-project = "1.0.6"
+futures-core = "0.3.13"
 
 
 # warp
