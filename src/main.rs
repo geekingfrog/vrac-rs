@@ -59,7 +59,7 @@ async fn gen_token_post(
     form_input: Form<TokenInput<'_>>,
     conn: VracDbConn,
     write_lock: &rocket::State<WriteLock>,
-) -> String {
+) -> errors::Result<response::Redirect> {
     println!("got a form input: {:?}", form_input);
     let now = chrono::Utc::now();
     let token_expires_at =
@@ -69,15 +69,30 @@ async fn gen_token_post(
         .map(|h| chrono::Duration::hours(h as _));
     let token = db::CreateToken {
         path: form_input.path.to_string(),
-        max_size_in_mb: None,
+        max_size_in_mib: form_input.max_size,
         token_expires_at,
         content_expires_after_hours,
     };
     let new_token = {
         let _guard = write_lock.0.lock().await;
-        conn.run(|c| db::create_token(c, token)).await
+        conn.run(|c| db::create_token(c, token)).await?
     };
-    format!("{:?}", new_token)
+    Ok(response::Redirect::to(rocket::uri!(get_file(
+        new_token.path
+    ))))
+}
+
+#[derive(Serialize)]
+struct FileView {
+    id: i32,
+    name: Option<String>,
+    dl_uri: String,
+}
+
+#[derive(Serialize)]
+struct GetFilesView<'a> {
+    tok_str: &'a str,
+    files: Vec<FileView>,
 }
 
 #[rocket::get("/f/<tok>")]
@@ -89,23 +104,64 @@ async fn get_file(tok: &str, conn: VracDbConn) -> errors::Result<Option<Template
         None => Ok(None),
         Some(tok) => match &tok.status {
             db::TokenStatus::Fresh => Ok(Some(get_file_upload(tok).await)),
-            db::TokenStatus::Used => Ok(Some(Template::render("get_files", &()))),
+            db::TokenStatus::Used => get_files_view(tok, conn).await,
             db::TokenStatus::Expired => unreachable!("valid token cannot be expired"),
             db::TokenStatus::Deleted => unreachable!("valid token cannot be deleted"),
         },
     }
 }
 
+async fn get_files_view(token: db::Token, conn: VracDbConn) -> errors::Result<Option<Template>> {
+    let path = token.path.clone();
+    let files = conn.run(move |c| db::get_files(c, &token)).await?;
+    let ctx = GetFilesView {
+        tok_str: &path,
+        files: files
+            .into_iter()
+            .map(|f| FileView {
+                id: f.id,
+                name: f.name,
+                dl_uri: rocket::uri!(download_file(path.clone(), f.id)).to_string(),
+            })
+            .collect(),
+    };
+    Ok(Some(Template::render("get_files", &ctx)))
+}
+
+#[rocket::get("/f/<tok_id>/<f_id>")]
+async fn download_file(tok_id: String, f_id: i32, conn: VracDbConn) -> errors::Result<Option<fs::File>> {
+    let file: Option<db::File> = conn
+        .run(move |c| {
+            let token = db::get_valid_token(c, tok_id)?;
+            let token = match token {
+                Some(t) => t,
+                None => return Ok(None),
+            };
+            let file = db::get_file(c, &token, f_id)?;
+            let r: errors::Result<Option<db::File>> = Ok(file);
+            r
+        })
+        .await?;
+
+    let file = match file {
+        Some(f) => f,
+        None => return Ok(None),
+    };
+
+    let fd = fs::File::open(file.path).await?;
+    Ok(Some(fd))
+}
+
 #[derive(Serialize)]
 struct UploadFilesData {
     form_action: String,
-    max_size_in_mb: Option<i32>,
+    max_size_in_mib: Option<i32>,
 }
 
 async fn get_file_upload(tok: db::Token) -> Template {
     let ctx = UploadFilesData {
         form_action: rocket::uri!(get_file(tok.path)).to_string(),
-        max_size_in_mb: tok.max_size_in_mb,
+        max_size_in_mib: tok.max_size_in_mib,
     };
     Template::render("upload_files", &ctx)
 }
@@ -132,6 +188,7 @@ async fn upload_file(
     conn: VracDbConn,
     data: Data<'_>,
     boundary: MultipartBoundary<'_>,
+    write_lock: &rocket::State<WriteLock>,
 ) -> errors::Result<Option<response::Redirect>> {
     let tokstr = tok.to_string();
     let tok = conn.run(|c| db::get_valid_token(&c, tokstr)).await?;
@@ -142,21 +199,36 @@ async fn upload_file(
     };
     println!("token: {:#?}", tok);
 
-    let max_stream_size = match tok.max_size_in_mb {
-        // add 1 to account for the boundaries in the actual form
-        Some(s) => (s + 1).mebibytes(),
+    let max_stream_size = match tok.max_size_in_mib {
+        // add 10 kiB (generous) to account for the boundaries in the actual form
+        Some(s) => s.mebibytes() + 10.kibibytes(),
         None => usize::MAX.mebibytes(),
     };
-    let stream = codec::FramedRead::new(data.open(max_stream_size), codec::BytesCodec::new());
-    let mut multipart = Multipart::new(stream, boundary.0.to_string());
+    info!("streaming at most {} mebibytes", max_stream_size);
 
-    let dest_path = Path::new("/tmp/vractest/foo");
-    fs::create_dir_all(dest_path)
+    // open(size) will close the connection after the limit. This result in a broken pipe
+    // for the client, on a browser you get a page "connectio was reset" which isn't ideal
+    // TODO: perhaps, when the limit is reached, continue reading but discard everything
+    // and return the correct error? That could be used to use a lot of network resource though.
+    // Also, figure out how to clean up stuff already uploaded
+    let stream = codec::FramedRead::new(data.open(max_stream_size), codec::BytesCodec::new());
+
+    // TODO allow more files
+    let constraints = Constraints::new().allowed_fields(vec!["file-1"]);
+    let mut multipart = Multipart::with_constraints(stream, boundary.0.to_string(), constraints);
+
+    // TODO: use cap_std to prevent an attacker controller value of tok.path
+    // to escape the root of the files
+    // This is fairly minimal though since only admins/owner should have the
+    // ability to generate tokens.
+    let dest_path = Path::new("/tmp/vractest").join(&tok.path);
+    fs::create_dir_all(&dest_path)
         .await
         .context("Cannot create temporary file")?;
 
     while let Some(mut field) = multipart.next_field().await? {
         let mut file_path = dest_path.to_path_buf();
+        let mut file_size = 0.mebibytes();
         match field.file_name() {
             Some(file_name) => {
                 if file_name.is_empty() {
@@ -174,9 +246,20 @@ async fn upload_file(
             &file_path.to_string_lossy(),
         );
 
+        let db_file = {
+            let _guard = write_lock.0.lock().await;
+            let create_file = db::CreateFile {
+                token_id: tok.id,
+                name: field.name().map(|s| s.to_string()),
+                path: file_path.clone(),
+            };
+            conn.run(move |c| db::create_file(&c, create_file)).await?
+        };
+
         let file_to_write = fs::OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(true)
             .open(&file_path)
             .await
             .with_context(|| {
@@ -185,21 +268,45 @@ async fn upload_file(
                     &file_path.to_string_lossy()
                 )
             })?;
-        let mut writer = io::BufWriter::new(file_to_write);
+        let mut writer = file_to_write;
 
-        while let Some(chunk) = field.chunk().await? {
-            writer.write(&chunk).await.with_context(|| {
+        while let Some(mut chunk) = field.chunk().await? {
+            file_size = file_size + chunk.len().bytes();
+            info!(
+                "written so far: {}  (wrote {})",
+                file_size,
+                chunk.len().bytes()
+            );
+            writer.write_all_buf(&mut chunk).await.with_context(|| {
                 format!("Error writing to file {}", &file_path.to_string_lossy())
             })?;
+            writer.flush().await.unwrap();
         }
         writer
             .shutdown()
             .await
             .with_context(|| format!("Error writing to file {}", &file_path.to_string_lossy()))?;
+        let file_size_mib = file_size.as_u64();
+
+        {
+            let _guard = write_lock.0.lock().await;
+            conn.run(move |c| db::complete_upload(&c, db_file.id))
+                .await?;
+        }
+
+        info!(
+            "for file {} wrote {} - {} MiB",
+            &file_path.to_string_lossy(),
+            file_size,
+            file_size_mib
+        );
     }
 
     let tok_path = tok.path.clone();
-    conn.run(move |c| db::consume_token(c, tok)).await?;
+    {
+        let _guard = write_lock.0.lock().await;
+        conn.run(move |c| db::consume_token(c, tok)).await?;
+    }
     Ok(Some(response::Redirect::to(rocket::uri!(get_file(
         &tok_path
     )))))
@@ -216,12 +323,28 @@ fn rocket_main() -> _ {
     rocket::build()
         .mount(
             "/",
-            rocket::routes![index, gen_token_get, gen_token_post, get_file, upload_file,],
+            rocket::routes![
+                index,
+                gen_token_get,
+                gen_token_post,
+                get_file,
+                upload_file,
+                download_file
+            ],
         )
         .attach(Template::fairing())
         .attach(VracDbConn::fairing())
         .manage(WriteLock(Mutex::new(())))
 }
+
+// fn main() {
+//     let f = std::fs::File::create("/tmp/vractest/wut").unwrap();
+//     let mut writer = std::io::BufWriter::new(f);
+//     use std::io::prelude::*;
+//     for i in 0..100_000 {
+//         writer.write_fmt(format_args!("{:10} coucou\n",i)).unwrap();
+//     }
+// }
 
 // See:
 // https://stackoverflow.com/questions/56384447/how-do-i-transform-special-values-into-optionnone-when-using-serde-to-deserial

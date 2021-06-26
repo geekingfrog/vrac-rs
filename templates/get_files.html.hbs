@@ -12,9 +12,11 @@ body {
   </head>
 
   <body>
+    {{#each files}}
     <p>
-    Here is a file !
+    <a href="{{this.dl_uri}}">{{this.name}}</a>
     </p>
+    {{/each}}
   </body>
 
 </html>

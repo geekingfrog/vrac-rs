@@ -2,7 +2,7 @@ use std::io::Cursor;
 
 use diesel;
 use multer;
-use rocket::http::ContentType;
+use rocket::http::{ContentType, Status};
 use rocket::response;
 use thiserror::Error;
 
@@ -16,6 +16,9 @@ pub enum VracError {
     #[error("multipart decoding error {0:?}")]
     MultipartError(#[from] multer::Error),
 
+    #[error("IO error")]
+    IoError(#[from] std::io::Error),
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -25,6 +28,7 @@ impl<'r> response::Responder<'r, 'static> for VracError {
         let err_str = format!("{:#?}", self);
         response::Response::build()
             .sized_body(err_str.len(), Cursor::new(err_str))
+            .status(Status::InternalServerError)
             .header(ContentType::Text)
             .ok()
     }

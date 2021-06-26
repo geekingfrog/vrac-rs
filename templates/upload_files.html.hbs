@@ -13,10 +13,10 @@ body {
 
   <body>
     <p>
-    {{#if max_size_in_mb}}
-    Here, you can upload some files, for a total of up to {{max_size_in_mb}} MB.
+    {{#if max_size_in_mib}}
+    Here, you can upload a file, for a total of up to {{max_size_in_mib}} MB.
     {{else}}
-    Here, you can upload some files.
+    Here, you can upload a file.
     {{/if}}
     </p>
 
@@ -24,9 +24,9 @@ body {
       <p>
       <input type="file" id="file-1" name="file-1">
       </p>
-      <p>
-      <input type="file" id="file-2" name="file-2">
-      </p>
+      <!-- <p> -->
+      <!-- <input type="file" id="file-2" name="file-2"> -->
+      <!-- </p> -->
       <p>
         <button type="submit">Upload</button>
       </p>
