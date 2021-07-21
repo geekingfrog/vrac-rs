@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS file (
   token_id INTEGER NOT NULL,
   name TEXT,
   path TEXT NOT NULL,
+  content_type TEXT,
   size_mib INTEGER,
   created_at DATETIME NOT NULL DEFAULT (datetime('now')),
   deleted_at DATETIME,

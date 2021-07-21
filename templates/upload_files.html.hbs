@@ -19,6 +19,14 @@ body {
     Here, you can upload a file.
     {{/if}}
     </p>
+    <p>
+    This link is valid until {{token_expires_at_human}}.
+    {{#if content_expires_after_human}}
+    The content uploaded will expires {{content_expires_after_human}} after the upload.
+    {{else}}
+    The content uploaded will never expires.
+    {{/if}}
+    </p>
 
     <form action="{{form_action}}" method="POST" enctype="multipart/form-data">
       <p>

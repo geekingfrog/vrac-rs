@@ -4,6 +4,7 @@ table! {
         token_id -> Integer,
         name -> Nullable<Text>,
         path -> Text,
+        content_type -> Nullable<Text>,
         size_mib -> Nullable<Integer>,
         created_at -> Timestamp,
         deleted_at -> Nullable<Timestamp>,

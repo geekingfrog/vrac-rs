@@ -138,6 +138,7 @@ pub struct File {
     pub token_id: i32,
     pub name: Option<String>,
     pub path: String,
+    pub content_type: Option<String>,
     pub size_mib: Option<i32>,
     pub created_at: NaiveDateTime,
     pub deleted_at: Option<NaiveDateTime>,
@@ -148,6 +149,7 @@ pub struct File {
 pub struct CreateFile {
     pub path: std::path::PathBuf,
     pub name: Option<String>,
+    pub content_type: Option<String>,
     pub token_id: i32,
 }
 
@@ -155,8 +157,9 @@ pub struct CreateFile {
 #[table_name = "file"]
 struct CreateFileSQLite {
     token_id: i32,
-    path: String,
     name: Option<String>,
+    path: String,
+    content_type: Option<String>,
     size_mib: Option<i32>,
     file_upload_status: FileUploadStatus,
     created_at: NaiveDateTime,
@@ -174,31 +177,28 @@ pub fn create_token(
     //     .select(diesel::dsl::count_star())
     //     .first(&conn)?;
 
-    let existing_count: i64 = token::table
-        .select(diesel::dsl::count_star())
-        .filter(dsl::status.eq_any(vec![TokenStatus::Fresh, TokenStatus::Used]))
-        .filter(dsl::path.eq(&tok.path))
-        .first(conn)?;
-
-    if existing_count > 0 {
-        return Err(anyhow!(
-            "A valid token already exists for the path {}",
-            tok.path
-        ))?;
-    };
-
-    let sql_tok = CreateTokenSQLite {
-        path: tok.path,
-        status: TokenStatus::Fresh,
-        max_size_mib: tok.max_size_in_mib.map(|s| s as _),
-        created_at: Utc::now().naive_utc(),
-        token_expires_at: tok.token_expires_at,
-        content_expires_at: None,
-        content_expires_after_hours: tok.content_expires_after_hours.map(|d| d.num_hours() as _),
-        deleted_at: None,
-    };
-
     conn.transaction(|| {
+        let existing_count: i64 = token::table
+            .select(diesel::dsl::count_star())
+            .filter(dsl::status.eq_any(vec![TokenStatus::Fresh, TokenStatus::Used]))
+            .filter(dsl::path.eq(&tok.path))
+            .first(conn)?;
+
+        if existing_count > 0 {
+            return Err(errors::VracError::TokenAlreadyExists(tok.path))
+        };
+
+        let sql_tok = CreateTokenSQLite {
+            path: tok.path,
+            status: TokenStatus::Fresh,
+            max_size_mib: tok.max_size_in_mib.map(|s| s as _),
+            created_at: Utc::now().naive_utc(),
+            token_expires_at: tok.token_expires_at,
+            content_expires_at: None,
+            content_expires_after_hours: tok.content_expires_after_hours.map(|d| d.num_hours() as _),
+            deleted_at: None,
+        };
+
         let n_inserted = diesel::insert_into(token::table)
             .values(&sql_tok)
             .execute(conn)
@@ -251,6 +251,7 @@ pub fn create_file(conn: &SqliteConnection, file: CreateFile) -> errors::Result<
         token_id: file.token_id,
         name: file.name,
         path: file.path.to_string_lossy().to_string(),
+        content_type: file.content_type,
         size_mib: None,
         file_upload_status: FileUploadStatus::Started,
         created_at: Utc::now().naive_utc(),

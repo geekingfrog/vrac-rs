@@ -1,6 +1,7 @@
 use chrono;
+use chrono_humanize;
 use futures::stream::{self, Stream, StreamExt, TryStreamExt};
-use log::info;
+use log::{debug, info};
 use multer::bytes::{Bytes, BytesMut};
 use rocket;
 use rocket::data::{Data, ToByteUnit};
@@ -60,7 +61,6 @@ async fn gen_token_post(
     conn: VracDbConn,
     write_lock: &rocket::State<WriteLock>,
 ) -> errors::Result<response::Redirect> {
-    println!("got a form input: {:?}", form_input);
     let now = chrono::Utc::now();
     let token_expires_at =
         (now + chrono::Duration::hours(form_input.token_valid_for as _)).naive_utc();
@@ -86,6 +86,7 @@ async fn gen_token_post(
 struct FileView {
     id: i32,
     name: Option<String>,
+    content_type: Option<String>,
     dl_uri: String,
 }
 
@@ -121,6 +122,7 @@ async fn get_files_view(token: db::Token, conn: VracDbConn) -> errors::Result<Op
             .map(|f| FileView {
                 id: f.id,
                 name: f.name,
+                content_type: f.content_type,
                 dl_uri: rocket::uri!(download_file(path.clone(), f.id)).to_string(),
             })
             .collect(),
@@ -129,7 +131,11 @@ async fn get_files_view(token: db::Token, conn: VracDbConn) -> errors::Result<Op
 }
 
 #[rocket::get("/f/<tok_id>/<f_id>")]
-async fn download_file(tok_id: String, f_id: i32, conn: VracDbConn) -> errors::Result<Option<fs::File>> {
+async fn download_file(
+    tok_id: String,
+    f_id: i32,
+    conn: VracDbConn,
+) -> errors::Result<Option<(http::ContentType, fs::File)>> {
     let file: Option<db::File> = conn
         .run(move |c| {
             let token = db::get_valid_token(c, tok_id)?;
@@ -149,19 +155,32 @@ async fn download_file(tok_id: String, f_id: i32, conn: VracDbConn) -> errors::R
     };
 
     let fd = fs::File::open(file.path).await?;
-    Ok(Some(fd))
+    // box & dyn don't play well with the Responder implementations, so
+    // default to a content type instead of returning different type of response
+    // depending on the match on file.content_type
+    let content_type = file
+        .content_type
+        .and_then(|ct| http::ContentType::parse_flexible(&ct))
+        .unwrap_or(http::ContentType::Binary);
+    Ok(Some((content_type, fd)))
 }
 
 #[derive(Serialize)]
 struct UploadFilesData {
     form_action: String,
     max_size_in_mib: Option<i32>,
+    token_expires_at_human: String,
+    content_expires_after_human: Option<String>,
 }
 
 async fn get_file_upload(tok: db::Token) -> Template {
     let ctx = UploadFilesData {
         form_action: rocket::uri!(get_file(tok.path)).to_string(),
         max_size_in_mib: tok.max_size_in_mib,
+        token_expires_at_human: tok.token_expires_at.format("%F %r").to_string(),
+        content_expires_after_human: tok
+            .content_expires_after_hours
+            .map(|h| chrono_humanize::HumanTime::from(chrono::Duration::hours(h as _)).to_string()),
     };
     Template::render("upload_files", &ctx)
 }
@@ -252,6 +271,7 @@ async fn upload_file(
                 token_id: tok.id,
                 name: field.name().map(|s| s.to_string()),
                 path: file_path.clone(),
+                content_type: field.content_type().map(|ct| ct.to_string()),
             };
             conn.run(move |c| db::create_file(&c, create_file)).await?
         };
@@ -272,7 +292,7 @@ async fn upload_file(
 
         while let Some(mut chunk) = field.chunk().await? {
             file_size = file_size + chunk.len().bytes();
-            info!(
+            debug!(
                 "written so far: {}  (wrote {})",
                 file_size,
                 chunk.len().bytes()

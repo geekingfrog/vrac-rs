@@ -19,16 +19,25 @@ pub enum VracError {
     #[error("IO error")]
     IoError(#[from] std::io::Error),
 
+    #[error("Token already exist: {0}")]
+    TokenAlreadyExists(String),
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
 
 impl<'r> response::Responder<'r, 'static> for VracError {
     fn respond_to(self, _: &'r rocket::Request<'_>) -> response::Result<'static> {
-        let err_str = format!("{:#?}", self);
+        let (err_str, status) = match &self {
+            VracError::TokenAlreadyExists(tok) => {
+                let err_str = format!("Token already exists for path {}", tok);
+                (err_str, Status::BadRequest)
+            },
+            _ => (format!("{:#?}", self), Status::InternalServerError)
+        };
         response::Response::build()
             .sized_body(err_str.len(), Cursor::new(err_str))
-            .status(Status::InternalServerError)
+            .status(status)
             .header(ContentType::Text)
             .ok()
     }
