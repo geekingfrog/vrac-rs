@@ -33,7 +33,10 @@ impl<'r> response::Responder<'r, 'static> for VracError {
                 let err_str = format!("Token already exists for path {}", tok);
                 (err_str, Status::BadRequest)
             },
-            _ => (format!("{:#?}", self), Status::InternalServerError)
+            _ => {
+                log::error!("got a generic error! {:?}", self);
+                (format!("{:#?}", self), Status::InternalServerError)
+            }
         };
         response::Response::build()
             .sized_body(err_str.len(), Cursor::new(err_str))

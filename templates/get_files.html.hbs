@@ -12,6 +12,9 @@ body {
   </head>
 
   <body>
+
+    {{> partial_flash flash }}
+
     {{#each files}}
     <p>
     <a href="{{this.dl_uri}}">{{this.name}}</a>

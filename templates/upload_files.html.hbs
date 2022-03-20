@@ -12,6 +12,9 @@ body {
   </head>
 
   <body>
+
+    {{> partial_flash flash }}
+
     <p>
     {{#if max_size_in_mib}}
     Here, you can upload a file, for a total of up to {{max_size_in_mib}} MB.
