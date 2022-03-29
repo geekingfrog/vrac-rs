@@ -33,5 +33,9 @@ name = "gen-user"
 path = "src/bin/gen_user.rs"
 
 [[bin]]
+name = "cleanup"
+path = "src/bin/cleanup.rs"
+
+[[bin]]
 name = "teststuff"
 path = "src/bin/teststuff.rs"

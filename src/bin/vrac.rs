@@ -128,6 +128,7 @@ struct FileView {
     name: Option<String>,
     content_type: Option<String>,
     dl_uri: String,
+    is_image: bool,
 }
 
 #[derive(Serialize)]
@@ -151,7 +152,6 @@ async fn get_file(
         Some(tok) => match &tok.status {
             db::TokenStatus::Fresh => Ok(Some(get_file_upload(tok, flash).await)),
             db::TokenStatus::Used => get_files_view(tok, conn, flash).await,
-            db::TokenStatus::Expired => unreachable!("valid token cannot be expired"),
             db::TokenStatus::Deleted => unreachable!("valid token cannot be deleted"),
         },
     }
@@ -168,11 +168,20 @@ async fn get_files_view(
         tok_str: &path,
         files: files
             .into_iter()
-            .map(|f| FileView {
-                id: f.id,
-                name: f.name,
-                content_type: f.content_type,
-                dl_uri: rocket::uri!(download_file(path.clone(), f.id)).to_string(),
+            .map(|f| {
+                let is_image = f
+                    .content_type
+                    .as_ref()
+                    .map(|ct| ct.starts_with("image"))
+                    .unwrap_or(false);
+
+                FileView {
+                    id: f.id,
+                    name: f.name,
+                    content_type: f.content_type,
+                    dl_uri: rocket::uri!(download_file(path.clone(), f.id)).to_string(),
+                    is_image,
+                }
             })
             .collect(),
         flash: flash.map(|f| f.into()),
@@ -457,6 +466,11 @@ struct VracDbConn(diesel::SqliteConnection);
 
 // simplify sqlite tx by only supporting one writer at a time.
 struct WriteLock(Mutex<()>);
+
+/// background job which regularly checks if any files should be deleted
+async fn cleanup_files() -> anyhow::Result<()> {
+    Ok(())
+}
 
 #[rocket::launch]
 fn rocket_main() -> _ {

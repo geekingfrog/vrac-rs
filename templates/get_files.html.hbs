@@ -17,7 +17,13 @@ body {
 
     {{#each files}}
     <p>
-    <a href="{{this.dl_uri}}">{{this.name}}</a>
+
+    {{#if this.is_image}}
+    <img alt="{{name}}" src="{{dl_uri}}">
+    {{else}}
+    <a href="{{dl_uri}}">{{name}}</a> ({{content_type}})
+    {{/if}}
+
     </p>
     {{/each}}
   </body>

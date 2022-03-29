@@ -1,4 +1,6 @@
 #![allow(unused_imports)]
+use std::collections::HashMap;
+
 use crate::errors;
 use anyhow::{Context, Result};
 use chrono::naive::NaiveDateTime;
@@ -16,11 +18,11 @@ use scrypt::{
 };
 
 // use crate::schema::{file, token};
-use crate::schema::{file, token, auth};
+use crate::schema::{auth, file, token};
 
 diesel_migrations::embed_migrations!("./migrations/");
 
-#[derive(Debug, Queryable, Identifiable)]
+#[derive(Debug, Queryable, Identifiable, Hash, PartialEq, Eq)]
 #[table_name = "token"]
 pub struct Token {
     pub id: i32,
@@ -29,7 +31,10 @@ pub struct Token {
     pub max_size_in_mib: Option<i32>,
     pub created_at: NaiveDateTime,
     pub token_expires_at: NaiveDateTime,
+    /// any file associated to this token after `content_expires_at` can be deleted
     pub content_expires_at: Option<NaiveDateTime>,
+    /// we need to store in the token how long the associated content will
+    /// live for. At token creation, we can't set the expiration date.
     pub content_expires_after_hours: Option<i32>,
     pub deleted_at: Option<NaiveDateTime>,
 }
@@ -55,12 +60,11 @@ struct CreateTokenSQLite {
     deleted_at: Option<NaiveDateTime>,
 }
 
-#[derive(Debug, FromSqlRow, AsExpression, Clone, Copy)]
+#[derive(Debug, FromSqlRow, AsExpression, Clone, Copy, Hash, PartialEq, Eq)]
 #[sql_type = "Text"]
 pub enum TokenStatus {
     Fresh,
     Used,
-    Expired,
     Deleted,
 }
 
@@ -73,7 +77,6 @@ where
         match &(String::from_sql(bytes)?)[..] {
             "FRESH" => Ok(TokenStatus::Fresh),
             "USED" => Ok(TokenStatus::Used),
-            "EXPIRED" => Ok(TokenStatus::Expired),
             "DELETED" => Ok(TokenStatus::Deleted),
             x => Err(format!("Unknown token status: {}", x).into()),
         }
@@ -91,7 +94,6 @@ where
         let tag = match self {
             TokenStatus::Fresh => "FRESH",
             TokenStatus::Used => "USED",
-            TokenStatus::Expired => "EXPIRED",
             TokenStatus::Deleted => "DELETED",
         };
         ToSql::<sql_types::Text, DB>::to_sql(tag, out)
@@ -184,11 +186,6 @@ pub fn create_token(
     tok: CreateToken,
 ) -> std::result::Result<Token, errors::VracError> {
     use token::dsl;
-    // let existing_token = dsl::token
-    //     .filter(dsl::status.eq_any(vec![TokenStatus::Fresh, TokenStatus::Used]))
-    //     .filter(dsl::path.eq(&tok.path))
-    //     .select(diesel::dsl::count_star())
-    //     .first(&conn)?;
 
     conn.transaction(|| {
         let existing_count: i64 = token::table
@@ -221,7 +218,7 @@ pub fn create_token(
 
         println!("inserted returned: {:#?}", n_inserted);
         if n_inserted == 0 {
-            Err(anyhow!("Didn't insert token: {:?}", sql_tok))?
+            Err(anyhow!("Didn't insert token: {:?}", sql_tok).into())
         } else {
             let inserted_token = token::table.order(token::id.desc()).first(conn)?;
             Ok(inserted_token)
@@ -229,16 +226,69 @@ pub fn create_token(
     })
 }
 
+/// returns a token with a status of Fresh or Used, and also ensure
+/// that the associated content hasn't expired yet
 pub fn get_valid_token(
     conn: &SqliteConnection,
     token_path: String,
 ) -> std::result::Result<Option<Token>, diesel::result::Error> {
     // there should be at most one token with a given path in status fresh or used.
+    let now = chrono::Utc::now().naive_utc();
     let tok: Vec<Token> = token::table
         .filter(token::path.eq(token_path))
         .filter(token::status.eq_any(vec![TokenStatus::Fresh, TokenStatus::Used]))
+        .filter(token::content_expires_at.ge(now))
         .load(conn)?;
     Ok(tok.into_iter().next())
+}
+
+/// Returns a list of expired token and their associated file
+pub fn get_expired_files(
+    conn: &SqliteConnection,
+) -> std::result::Result<HashMap<Token, Vec<File>>, Box<dyn std::error::Error>> {
+    let now = chrono::Utc::now().naive_utc();
+    let expired_tokens: Vec<Token> = token::table
+        .filter(token::content_expires_at.le(now))
+        .filter(token::dsl::deleted_at.is_null())
+        .load(conn)?;
+
+    let mut result = HashMap::new();
+
+    // It's sqlite so n+1 requests is no big deal
+    for tok in expired_tokens {
+        let expired_files = File::belonging_to(&tok).load::<File>(conn)?;
+        result.insert(tok, expired_files);
+    }
+
+    Ok(result)
+}
+
+/// mark the given tokens and their associated files as deleted in the DB
+/// Returns the total number of deleted files.
+pub fn delete_files(
+    conn: &SqliteConnection,
+    tokens: &[Token],
+) -> std::result::Result<usize, Box<dyn std::error::Error>> {
+    let deleted_file_count = conn.transaction::<_, diesel::result::Error, _>(|| {
+        // use file::dsl::file;
+        let mut deleted_file_count = 0;
+
+        let now = chrono::Utc::now().naive_utc();
+        for tok in tokens {
+            deleted_file_count +=
+                diesel::update(file::dsl::file.filter(file::dsl::token_id.eq(tok.id)))
+                    .set(file::dsl::deleted_at.eq(now))
+                    .execute(conn)?;
+            diesel::update(token::dsl::token.find(tok.id))
+                .set((
+                    token::dsl::deleted_at.eq(now),
+                    token::dsl::status.eq(TokenStatus::Deleted),
+                ))
+                .execute(conn)?;
+        }
+        Ok(deleted_file_count)
+    })?;
+    Ok(deleted_file_count)
 }
 
 /// Mark the given as Used, all files have been uploaded
@@ -275,6 +325,7 @@ pub fn create_file(conn: &SqliteConnection, file: CreateFile) -> errors::Result<
     conn.transaction(move || {
         let n_inserted = diesel::insert_into(file::table)
             .values(&create_file)
+            // cannot use get_result because sqlite doesn't support RETURNING :(
             .execute(conn)?;
 
         if n_inserted == 0 {
@@ -327,7 +378,10 @@ pub fn gen_user(
         .hash_password(cleartext_password.as_bytes(), &salt)
         .with_context(|| format!("Cannot hash password for user {username}"))?
         .to_string();
-    let auth = Auth{ id: username, phc: hash };
+    let auth = Auth {
+        id: username,
+        phc: hash,
+    };
 
     // don't care if the user already exist and this fails.
     diesel::insert_into(auth::table)
@@ -341,6 +395,6 @@ pub fn gen_user(
 /// format](https://github.com/P-H-C/phc-string-format/blob/master/phc-sf-spec.md)
 pub fn get_user_auth(conn: &SqliteConnection, username: String) -> errors::Result<String> {
     use crate::schema::auth::dsl;
-    let result: Auth = dsl::auth.find(username).first(conn)?;
+    let result: Auth = dsl::auth.find(username).get_result(conn)?;
     Ok(result.phc)
 }
