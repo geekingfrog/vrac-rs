@@ -4,6 +4,7 @@ use futures::stream::{self, Stream, StreamExt, TryStreamExt};
 use multer::bytes::{Bytes, BytesMut};
 use rocket::data::{ByteUnit, Data, ToByteUnit};
 use rocket::form::{Form, FromForm};
+use rocket::outcome::Outcome;
 use rocket::request::FlashMessage;
 use rocket::response::{Flash, Redirect, Responder};
 use rocket::serde::{de::Error, Deserialize, Deserializer, Serialize};
@@ -12,23 +13,24 @@ use rocket::tokio::{fs, io, io::AsyncWrite, io::AsyncWriteExt};
 use rocket::{http, request, response};
 use rocket_dyn_templates::Template;
 use rocket_sync_db_pools::database;
+use scrypt::password_hash::{PasswordHash, PasswordVerifier};
+use scrypt::Scrypt;
 use std::path::{Path, PathBuf};
 use tokio_util::codec;
 
 use multer::{Constraints, Multipart, SizeLimit};
 
-#[macro_use]
-extern crate anyhow;
+// #[macro_use]
+// extern crate anyhow;
 use anyhow::Context;
 
-#[macro_use]
-extern crate diesel;
-#[macro_use]
-extern crate diesel_migrations;
+// #[macro_use]
+// extern crate diesel;
+// #[macro_use]
+// extern crate diesel_migrations;
 
-mod db;
-mod errors;
-mod schema;
+use vrac::db;
+use vrac::errors;
 
 #[rocket::get("/")]
 fn index() -> &'static str {
@@ -50,27 +52,42 @@ struct TokenInput<'r> {
 }
 
 #[rocket::get("/gen")]
-fn gen_token_get(flash: Option<FlashMessage<'_>>) -> Template {
+fn gen_token_get(_admin: AdminUser, flash: Option<FlashMessage<'_>>) -> Template {
     let ctx: Option<FlashData> = flash.map(|f| f.into());
     Template::render("gen_token", &ctx)
 }
 
-// struct R<T>(T);
-//
-// // trait Tt<'r, 'o: 'r>: Responder<'r, 'o> + std::marker::Copy {}
-//
-// impl<'r, 'o: 'r> Responder<'r, 'o> for R<Box<dyn Responder<'r, 'o>>> {
-//     fn respond_to(self: Box<Self>, request: &'r rocket::Request<'_>) -> response::Result<'o> {
-//         // let x = self.0;
-//         self.0.respond_to(request)
-//     }
-// }
+struct RequiresBasicAuth;
+
+impl<'r> Responder<'r, 'static> for RequiresBasicAuth {
+    fn respond_to(self, _request: &'r rocket::Request<'_>) -> response::Result<'static> {
+        let hdr = http::Header {
+            name: "WWW-Authenticate".into(),
+            value: r#"Basic realm="vrac""#.into(),
+        };
+
+        Ok(rocket::response::Response::build()
+            .status(http::Status::Unauthorized)
+            .header(hdr)
+            .finalize())
+    }
+}
+
+#[rocket::get("/gen", rank = 2)]
+fn gen_token_get_pecore<'r>() -> impl Responder<'r, 'static> {
+    // WWW-Authenticate: Basic realm="Our Site"
+    // log::info!("NO LOGIN!");
+    // let ctx: Option<FlashData> = flash.map(|f| f.into());
+    // Template::render("gen_token", &ctx)
+    RequiresBasicAuth {}
+}
 
 #[rocket::post("/gen", data = "<form_input>")]
 async fn gen_token_post<'a, 'o>(
     form_input: Form<TokenInput<'_>>,
     conn: VracDbConn,
     write_lock: &rocket::State<WriteLock>,
+    _admin: AdminUser,
 ) -> errors::Result<Flash<Redirect>> {
     let now = chrono::Utc::now();
     let token_expires_at =
@@ -96,8 +113,13 @@ async fn gen_token_post<'a, 'o>(
         Err(err) => {
             let redir = Redirect::to(rocket::uri!(gen_token_get()));
             Ok(Flash::error(redir, format!("{err}")))
-        },
+        }
     }
+}
+
+#[rocket::post("/gen", rank = 2)]
+async fn gen_token_post_pecore<'r>() -> impl Responder<'r, 'static> {
+    RequiresBasicAuth {}
 }
 
 #[derive(Serialize)]
@@ -127,9 +149,7 @@ async fn get_file(
     match tok {
         None => Ok(None),
         Some(tok) => match &tok.status {
-            db::TokenStatus::Fresh => Ok(Some(
-                get_file_upload(tok, flash).await,
-            )),
+            db::TokenStatus::Fresh => Ok(Some(get_file_upload(tok, flash).await)),
             db::TokenStatus::Used => get_files_view(tok, conn, flash).await,
             db::TokenStatus::Expired => unreachable!("valid token cannot be expired"),
             db::TokenStatus::Deleted => unreachable!("valid token cannot be deleted"),
@@ -218,9 +238,9 @@ impl<'f> std::convert::From<FlashMessage<'f>> for FlashData {
             "warning" => "orange",
             _ => "default",
         };
-        FlashData{
+        FlashData {
             color,
-            message: flash.message().to_string()
+            message: flash.message().to_string(),
         }
     }
 }
@@ -251,6 +271,36 @@ impl<'r> request::FromRequest<'r> for MultipartBoundary<'r> {
             Some(boundary) => request::Outcome::Success(MultipartBoundary(boundary)),
             None => request::Outcome::Forward(()),
         })
+    }
+}
+
+struct AdminUser;
+
+#[rocket::async_trait]
+impl<'r> request::FromRequest<'r> for AdminUser {
+    type Error = std::convert::Infallible;
+
+    async fn from_request(request: &'r rocket::Request<'_>) -> request::Outcome<Self, Self::Error> {
+        match request.headers().get_one("Authorization") {
+            Some(auth) => {
+                if let Some(encoded_creds) = auth.strip_prefix("Basic ") {
+                    let conn = match request.guard::<VracDbConn>().await {
+                        Outcome::Success(conn) => conn,
+                        Outcome::Failure(_) | Outcome::Forward(_) => return Outcome::Forward(()),
+                    };
+                    if is_basic_auth_valid(conn, encoded_creds).await {
+                        log::debug!("auth is valid!");
+                        Outcome::Success(AdminUser {})
+                    } else {
+                        log::debug!("auth is invalid!");
+                        Outcome::Forward(())
+                    }
+                } else {
+                    request::Outcome::Forward(())
+                }
+            }
+            None => request::Outcome::Forward(()),
+        }
     }
 }
 
@@ -293,10 +343,11 @@ async fn upload_file<'a, 'o>(
         .size_limit(SizeLimit::new().whole_stream(max_stream_size.as_u64()));
     let mut multipart = Multipart::with_constraints(stream, boundary.0.to_string(), constraints);
 
-    // TODO: use cap_std to prevent an attacker controller value of tok.path
-    // to escape the root of the files
+    // TODO: use cap_std to prevent an attacker to escape the root path with
+    // some chosen value of tok.path
     // This is fairly minimal though since only admins/owner should have the
     // ability to generate tokens.
+    // TODO: make the root of the files configurable
     let dest_path = Path::new("/tmp/vractest").join(&dbtoken.path);
     fs::create_dir_all(&dest_path)
         .await
@@ -409,13 +460,15 @@ struct WriteLock(Mutex<()>);
 
 #[rocket::launch]
 fn rocket_main() -> _ {
-    rocket::build()
+    rocket::custom(rocket::Config::figment())
         .mount(
             "/",
             rocket::routes![
                 index,
                 gen_token_get,
+                gen_token_get_pecore,
                 gen_token_post,
+                gen_token_post_pecore,
                 get_file,
                 upload_file,
                 download_file
@@ -425,15 +478,6 @@ fn rocket_main() -> _ {
         .attach(VracDbConn::fairing())
         .manage(WriteLock(Mutex::new(())))
 }
-
-// fn main() {
-//     let f = std::fs::File::create("/tmp/vractest/wut").unwrap();
-//     let mut writer = std::io::BufWriter::new(f);
-//     use std::io::prelude::*;
-//     for i in 0..100_000 {
-//         writer.write_fmt(format_args!("{:10} coucou\n",i)).unwrap();
-//     }
-// }
 
 // See:
 // https://stackoverflow.com/questions/56384447/how-do-i-transform-special-values-into-optionnone-when-using-serde-to-deserial
@@ -459,6 +503,32 @@ where
         Err(e) => {
             eprintln!("got err: {:?}", e);
             Err(e)
+        }
+    }
+}
+
+async fn is_basic_auth_valid(conn: VracDbConn, encoded_creds: &str) -> bool {
+    let f = || async move {
+        let bytes = base64::decode(encoded_creds)?;
+        let s = std::str::from_utf8(&bytes[..])?;
+        let split_idx = s.find(':').ok_or("Cannot find separator :")?;
+        let (username, password) = s.split_at(split_idx);
+        let password = &password[1..]; // remove the :
+        log::debug!("verifying auth for username {username}");
+        // grmbl, need that because conn.run expects 'static
+        let username = username.to_string();
+        let hashed_password = conn.run(move |c| db::get_user_auth(c, username)).await?;
+        let parsed_hash = PasswordHash::new(&hashed_password)?;
+        Scrypt.verify_password(password.as_bytes(), &parsed_hash)?;
+        Ok(())
+    };
+
+    let r: std::result::Result<_, Box<dyn std::error::Error>> = f().await;
+    match r {
+        Ok(_) => true,
+        Err(err) => {
+            log::error!("{err:?}");
+            false
         }
     }
 }

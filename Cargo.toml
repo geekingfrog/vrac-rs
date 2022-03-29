@@ -2,29 +2,35 @@
 name = "vrac"
 version = "0.1.0"
 authors = ["Grégoire Charvet 黑瓜 <greg+git@geekingfrog.com>"]
-edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+edition = "2021"
 
 [dependencies]
 anyhow = "1.0.56"
+base64 = "0.13.0"
 chrono = "0.4.19"
 chrono-humanize = "0.2.1"
-diesel = { version = "1.4.8", features = ["chrono", "sqlite"] }
+clap = { version = "3.1.6", features = ["derive"] }
 diesel_migrations = "1.4.0"
+diesel = { version = "1.4.8", features = ["chrono", "sqlite"] }
+figment = { version = "0.10.6", features = ["env", "toml"] }
 futures = "0.3.21"
 log = "0.4.14"
 multer = "2.0.2"
-rocket = { version = "0.5.0-rc.1", features = ["json"]}
 rocket_dyn_templates = { version = "0.1.0-rc.1", features = ["handlebars"] }
 rocket_sync_db_pools = { version = "0.1.0-rc.1", features = ["diesel_sqlite_pool"]}
+rocket = { version = "0.5.0-rc.1", features = ["json"]}
+scrypt = "0.10"
 serde = { version = "1.0.126", features = ["derive"] }
 thiserror = "1.0.30"
 tokio-util = { version = "0.7.0", features = ["codec"] }
 
 [[bin]]
 name = "vrac"
-path = "src/main.rs"
+path = "src/bin/vrac.rs"
+
+[[bin]]
+name = "gen-user"
+path = "src/bin/gen_user.rs"
 
 [[bin]]
 name = "teststuff"

@@ -1,4 +1,11 @@
 table! {
+    auth (id) {
+        id -> Text,
+        phc -> Text,
+    }
+}
+
+table! {
     file (id) {
         id -> Integer,
         token_id -> Integer,
@@ -29,6 +36,7 @@ table! {
 joinable!(file -> token (token_id));
 
 allow_tables_to_appear_in_same_query!(
+    auth,
     file,
     token,
 );

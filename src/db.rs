@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use crate::errors;
 use anyhow::{Context, Result};
 use chrono::naive::NaiveDateTime;
@@ -9,8 +10,13 @@ use diesel::{
     serialize::ToSql, sql_types, sql_types::Text, Connection, Insertable, Queryable,
     SqliteConnection,
 };
+use scrypt::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Scrypt,
+};
 
-use crate::schema::{file, token};
+// use crate::schema::{file, token};
+use crate::schema::{file, token, auth};
 
 diesel_migrations::embed_migrations!("./migrations/");
 
@@ -166,6 +172,13 @@ struct CreateFileSQLite {
     deleted_at: Option<NaiveDateTime>,
 }
 
+#[derive(Debug, Insertable, Queryable)]
+#[table_name = "auth"]
+struct Auth {
+    id: String,
+    phc: String,
+}
+
 pub fn create_token(
     conn: &mut SqliteConnection,
     tok: CreateToken,
@@ -185,7 +198,7 @@ pub fn create_token(
             .first(conn)?;
 
         if existing_count > 0 {
-            return Err(errors::VracError::TokenAlreadyExists(tok.path))
+            return Err(errors::VracError::TokenAlreadyExists(tok.path));
         };
 
         let sql_tok = CreateTokenSQLite {
@@ -195,7 +208,9 @@ pub fn create_token(
             created_at: Utc::now().naive_utc(),
             token_expires_at: tok.token_expires_at,
             content_expires_at: None,
-            content_expires_after_hours: tok.content_expires_after_hours.map(|d| d.num_hours() as _),
+            content_expires_after_hours: tok
+                .content_expires_after_hours
+                .map(|d| d.num_hours() as _),
             deleted_at: None,
         };
 
@@ -295,4 +310,37 @@ pub fn get_file(
         .first(conn)
         .optional()?;
     Ok(f)
+}
+
+pub fn connect(db_url: String) -> errors::Result<SqliteConnection> {
+    Ok(SqliteConnection::establish(&db_url)
+        .with_context(|| format!("cannot connect to {db_url}"))?)
+}
+
+pub fn gen_user(
+    conn: &SqliteConnection,
+    username: String,
+    cleartext_password: String,
+) -> errors::Result<()> {
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = Scrypt
+        .hash_password(cleartext_password.as_bytes(), &salt)
+        .with_context(|| format!("Cannot hash password for user {username}"))?
+        .to_string();
+    let auth = Auth{ id: username, phc: hash };
+
+    // don't care if the user already exist and this fails.
+    diesel::insert_into(auth::table)
+        .values(&auth)
+        .execute(conn)
+        .with_context(|| "cannot create user")?;
+    Ok(())
+}
+
+/// returns the hashed password for the given user in the [PHC
+/// format](https://github.com/P-H-C/phc-string-format/blob/master/phc-sf-spec.md)
+pub fn get_user_auth(conn: &SqliteConnection, username: String) -> errors::Result<String> {
+    use crate::schema::auth::dsl;
+    let result: Auth = dsl::auth.find(username).first(conn)?;
+    Ok(result.phc)
 }

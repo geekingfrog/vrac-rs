@@ -19,8 +19,11 @@ pub enum VracError {
     #[error("IO error")]
     IoError(#[from] std::io::Error),
 
-    #[error("Token already exist: {0}")]
+    #[error("Token already exists: {0}")]
     TokenAlreadyExists(String),
+
+    #[error("User already exists: {0}")]
+    UserAlreadyExists(String),
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
