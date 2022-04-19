@@ -174,13 +174,6 @@ struct CreateFileSQLite {
     deleted_at: Option<NaiveDateTime>,
 }
 
-#[derive(Debug, Insertable, Queryable)]
-#[table_name = "auth"]
-struct Auth {
-    id: String,
-    phc: String,
-}
-
 pub fn create_token(
     conn: &mut SqliteConnection,
     tok: CreateToken,
@@ -363,9 +356,27 @@ pub fn get_file(
     Ok(f)
 }
 
-pub fn connect(db_url: String) -> errors::Result<SqliteConnection> {
-    Ok(SqliteConnection::establish(&db_url)
+pub fn connect(db_url: &str) -> errors::Result<SqliteConnection> {
+    Ok(SqliteConnection::establish(db_url)
         .with_context(|| format!("cannot connect to {db_url}"))?)
+}
+
+// Atfer spending a few hours trying to figure out the intricacies of
+// Insertable and Queryable traits, I give up and use a different enum
+// for auth, the conversion will be done manually.
+// Storing an enum with field is unscrutable black magic (for me atm at least)
+#[derive(Debug, Insertable, Queryable)]
+#[table_name = "auth"]
+struct AuthRow {
+    id: String,
+    typ: String,
+    data: String,
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Auth {
+    Basic { phc: String },
 }
 
 pub fn gen_user(
@@ -374,13 +385,15 @@ pub fn gen_user(
     cleartext_password: String,
 ) -> errors::Result<()> {
     let salt = SaltString::generate(&mut OsRng);
-    let hash = Scrypt
+    let phc = Scrypt
         .hash_password(cleartext_password.as_bytes(), &salt)
         .with_context(|| format!("Cannot hash password for user {username}"))?
         .to_string();
-    let auth = Auth {
+
+    let auth = AuthRow {
         id: username,
-        phc: hash,
+        typ: "BASIC".to_string(),
+        data: phc,
     };
 
     // don't care if the user already exist and this fails.
@@ -393,8 +406,11 @@ pub fn gen_user(
 
 /// returns the hashed password for the given user in the [PHC
 /// format](https://github.com/P-H-C/phc-string-format/blob/master/phc-sf-spec.md)
-pub fn get_user_auth(conn: &SqliteConnection, username: String) -> errors::Result<String> {
+pub fn get_user_auth(conn: &SqliteConnection, username: String) -> errors::Result<Auth> {
     use crate::schema::auth::dsl;
-    let result: Auth = dsl::auth.find(username).get_result(conn)?;
-    Ok(result.phc)
+    let result: AuthRow = dsl::auth.find(username).get_result(conn)?;
+    match &result.typ[..] {
+        "BASIC" => Ok(Auth::Basic {phc: result.data}),
+        _ => todo!()
+    }
 }

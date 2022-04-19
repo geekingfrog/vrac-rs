@@ -3,6 +3,7 @@ use chrono_humanize;
 use futures::stream::{self, Stream, StreamExt, TryStreamExt};
 use multer::bytes::{Bytes, BytesMut};
 use rocket::data::{ByteUnit, Data, ToByteUnit};
+use rocket::fairing::AdHoc;
 use rocket::form::{Form, FromForm};
 use rocket::outcome::Outcome;
 use rocket::request::FlashMessage;
@@ -20,17 +21,25 @@ use tokio_util::codec;
 
 use multer::{Constraints, Multipart, SizeLimit};
 
-// #[macro_use]
-// extern crate anyhow;
 use anyhow::Context;
 
-// #[macro_use]
-// extern crate diesel;
-// #[macro_use]
-// extern crate diesel_migrations;
-
+use vrac::cleanup;
 use vrac::db;
 use vrac::errors;
+
+#[derive(Debug, Deserialize)]
+#[serde(crate = "rocket::serde")]
+struct VracConfig {
+    root_path: PathBuf,
+}
+
+impl Default for VracConfig {
+    fn default() -> Self {
+        Self {
+            root_path: std::env::current_dir().expect("Cannot access current dir???"),
+        }
+    }
+}
 
 #[rocket::get("/")]
 fn index() -> &'static str {
@@ -320,7 +329,9 @@ async fn upload_file<'a, 'o>(
     data: Data<'_>,
     boundary: MultipartBoundary<'_>,
     write_lock: &rocket::State<WriteLock>,
+    vrac_config: &rocket::State<VracConfig>,
 ) -> errors::Result<Option<Flash<Redirect>>> {
+    log::info!("vrac config is: {vrac_config:?}");
     let tokstr = tok.to_string();
     let dbtoken: db::Token = match conn.run(|c| db::get_valid_token(c, tokstr)).await? {
         // TODO would be better to redirect to get_file or something along these lines?
@@ -356,8 +367,7 @@ async fn upload_file<'a, 'o>(
     // some chosen value of tok.path
     // This is fairly minimal though since only admins/owner should have the
     // ability to generate tokens.
-    // TODO: make the root of the files configurable
-    let dest_path = Path::new("/tmp/vractest").join(&dbtoken.path);
+    let dest_path = vrac_config.root_path.as_path().join(&dbtoken.path);
     fs::create_dir_all(&dest_path)
         .await
         .context("Cannot create temporary file")?;
@@ -467,13 +477,7 @@ struct VracDbConn(diesel::SqliteConnection);
 // simplify sqlite tx by only supporting one writer at a time.
 struct WriteLock(Mutex<()>);
 
-/// background job which regularly checks if any files should be deleted
-async fn cleanup_files() -> anyhow::Result<()> {
-    Ok(())
-}
-
-#[rocket::launch]
-fn rocket_main() -> _ {
+fn build_app() -> rocket::Rocket<rocket::Build> {
     rocket::custom(rocket::Config::figment())
         .mount(
             "/",
@@ -490,7 +494,32 @@ fn rocket_main() -> _ {
         )
         .attach(Template::fairing())
         .attach(VracDbConn::fairing())
+        .attach(AdHoc::config::<VracConfig>())
         .manage(WriteLock(Mutex::new(())))
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let app = build_app().ignite().await?;
+
+    let pool = VracDbConn::get_one(&app)
+        .await
+        .ok_or("Cannot access connection pool")?;
+
+    let web_server = async {
+        app.launch().await?;
+        Ok::<_, Box<dyn std::error::Error>>(())
+    };
+
+    let background_job = async {
+        pool.run(|c| cleanup::cleanup_once(c).map_err(|err| format!("{:?}", err)))
+            .await?;
+        Ok(())
+    };
+
+    futures::try_join!(web_server, background_job)?;
+
+    Ok(())
 }
 
 // See:
@@ -531,10 +560,15 @@ async fn is_basic_auth_valid(conn: VracDbConn, encoded_creds: &str) -> bool {
         log::debug!("verifying auth for username {username}");
         // grmbl, need that because conn.run expects 'static
         let username = username.to_string();
-        let hashed_password = conn.run(move |c| db::get_user_auth(c, username)).await?;
-        let parsed_hash = PasswordHash::new(&hashed_password)?;
-        Scrypt.verify_password(password.as_bytes(), &parsed_hash)?;
-        Ok(())
+        let auth = conn.run(move |c| db::get_user_auth(c, username)).await?;
+        match auth {
+            db::Auth::Basic { phc } => {
+                let parsed_hash = PasswordHash::new(&phc)?;
+                Scrypt.verify_password(password.as_bytes(), &parsed_hash)?;
+                Ok(())
+            }
+            _ => Err("oops".into()),
+        }
     };
 
     let r: std::result::Result<_, Box<dyn std::error::Error>> = f().await;
@@ -568,7 +602,7 @@ where
 {
     let s: Option<&str> = Deserialize::deserialize(deserializer)?;
     match s {
-        Some(s) => S::from_str(&s)
+        Some(s) => S::from_str(s)
             .map(Some)
             .map_err(|_| D::Error::custom("could not parse string")),
         None => Ok(None),

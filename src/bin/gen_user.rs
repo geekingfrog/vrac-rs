@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     }?;
 
-    let conn = db::connect(db_url)?;
+    let conn = db::connect(&db_url)?;
     db::gen_user(&conn, args.username, args.password)?;
     Ok(())
 }

@@ -22,7 +22,9 @@ rocket = { version = "0.5.0-rc.1", features = ["json"]}
 scrypt = "0.10"
 serde = { version = "1.0.126", features = ["derive"] }
 thiserror = "1.0.30"
+tokio = "1.17.0"
 tokio-util = { version = "0.7.0", features = ["codec"] }
+env_logger = "*"
 
 [[bin]]
 name = "vrac"

@@ -1,2 +1,5 @@
 [global.databases]
 sqlite_vrac = { url = "./vrac.sqlite" }
+
+[default]
+root_path = "/tmp/vractest/"

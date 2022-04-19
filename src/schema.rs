@@ -1,7 +1,8 @@
 table! {
     auth (id) {
         id -> Text,
-        phc -> Text,
+        typ -> Text,
+        data -> Text,
     }
 }
 

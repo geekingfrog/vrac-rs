@@ -21,7 +21,7 @@ body {
     {{#if this.is_image}}
     <img alt="{{name}}" src="{{dl_uri}}">
     {{else}}
-    <a href="{{dl_uri}}">{{name}}</a> ({{content_type}})
+    <a href="{{dl_uri}}" download="{{name}}">{{name}}</a> ({{content_type}})
     {{/if}}
 
     </p>
