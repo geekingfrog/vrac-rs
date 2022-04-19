@@ -229,8 +229,11 @@ pub fn get_valid_token(
     let now = chrono::Utc::now().naive_utc();
     let tok: Vec<Token> = token::table
         .filter(token::path.eq(token_path))
-        .filter(token::status.eq_any(vec![TokenStatus::Fresh, TokenStatus::Used]))
-        .filter(token::content_expires_at.ge(now))
+        .filter(
+            token::token_expires_at
+                .ge(now)
+                .or(token::content_expires_at.ge(now)),
+        )
         .load(conn)?;
     Ok(tok.into_iter().next())
 }
@@ -410,7 +413,7 @@ pub fn get_user_auth(conn: &SqliteConnection, username: String) -> errors::Resul
     use crate::schema::auth::dsl;
     let result: AuthRow = dsl::auth.find(username).get_result(conn)?;
     match &result.typ[..] {
-        "BASIC" => Ok(Auth::Basic {phc: result.data}),
-        _ => todo!()
+        "BASIC" => Ok(Auth::Basic { phc: result.data }),
+        _ => todo!(),
     }
 }

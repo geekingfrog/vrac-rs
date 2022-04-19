@@ -375,7 +375,7 @@ async fn upload_file<'a, 'o>(
     while let Some(mut field) = multipart.next_field().await.context("multipart issue")? {
         let mut file_path = dest_path.to_path_buf();
         let mut file_size = ByteUnit::Mebibyte(0);
-        match field.file_name() {
+        match field.name().or_else(|| field.file_name()) {
             Some(file_name) => {
                 if file_name.is_empty() {
                     // avoid creating empty files
@@ -396,7 +396,7 @@ async fn upload_file<'a, 'o>(
             let _guard = write_lock.0.lock().await;
             let create_file = db::CreateFile {
                 token_id: dbtoken.id,
-                name: field.name().map(|s| s.to_string()),
+                name: field.file_name().map(|s| s.to_string()),
                 path: file_path.clone(),
                 content_type: field.content_type().map(|ct| ct.to_string()),
             };

@@ -2,4 +2,4 @@
 sqlite_vrac = { url = "./vrac.sqlite" }
 
 [default]
-root_path = "/tmp/vractest/"
+root_path = "./vracfiles/"
