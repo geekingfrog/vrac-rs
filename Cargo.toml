@@ -31,12 +31,8 @@ name = "vrac"
 path = "src/bin/vrac.rs"
 
 [[bin]]
-name = "gen-user"
-path = "src/bin/gen_user.rs"
-
-[[bin]]
-name = "cleanup"
-path = "src/bin/cleanup.rs"
+name = "admin"
+path = "src/bin/admin.rs"
 
 [[bin]]
 name = "teststuff"

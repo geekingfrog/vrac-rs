@@ -6,7 +6,6 @@ rsync --progress --recursive \
   migrations \
   templates \
   ./target/release/vrac \
-  ./target/release/cleanup \
-  ./target/release/gen-user \
+  ./target/release/admin \
   Rocket.toml \
   linode:~/vrac/
