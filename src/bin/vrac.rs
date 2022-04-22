@@ -38,8 +38,8 @@ impl Default for VracConfig {
 }
 
 #[rocket::get("/")]
-fn index() -> &'static str {
-    "Coucou"
+fn index<'r>() -> impl Responder<'r, 'static> {
+    Template::render("index", &())
 }
 
 #[derive(Debug, FromForm, Deserialize)]
@@ -169,6 +169,8 @@ async fn get_files_view(
 ) -> errors::Result<Option<Template>> {
     let path = token.path.clone();
     let files = conn.run(move |c| db::get_files(c, &token)).await?;
+    // TODO: check that each file exists, and if not, display something
+    // different so it's not a broken link.
     let ctx = GetFilesView {
         tok_str: &path,
         files: files

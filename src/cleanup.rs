@@ -34,7 +34,12 @@ pub fn cleanup_once(conn: &SqliteConnection) -> Result<(), Box<dyn Error>> {
 
     let del_token_paths = db::delete_expired_tokens(conn)?;
     for path in &del_token_paths {
-        std::fs::remove_dir_all(path)?;
+        match std::fs::remove_dir_all(&path) {
+            Ok(_) => (),
+            // if for some reason, the directory isn't there, ignore the error
+            Err(err) if err.kind() == ErrorKind::NotFound => (),
+            Err(err) => return Err(err.into()),
+        }
     }
 
     log::info!(
