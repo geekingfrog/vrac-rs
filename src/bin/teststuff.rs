@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use std::error::Error;
 
 use rocket::data::{ByteUnit, ToByteUnit};

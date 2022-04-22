@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+rsync --progress --recursive \
+  migrations \
+  ./target/release/vrac \
+  ./target/release/cleanup \
+  ./target/release/gen-user \
+  Rocket.toml \
+  linode:~/vrac/

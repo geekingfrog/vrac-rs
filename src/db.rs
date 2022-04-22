@@ -1,23 +1,18 @@
-#![allow(unused_imports)]
-use std::collections::HashMap;
-
-use crate::errors;
-use anyhow::{Context, Result};
+use anyhow::Context;
 use chrono::naive::NaiveDateTime;
 use chrono::Utc;
-use rocket::data::ByteUnit;
-
 use diesel::{
     backend::Backend, deserialize::FromSql, prelude::*, result::OptionalExtension,
     serialize::ToSql, sql_types, sql_types::Text, Connection, Insertable, Queryable,
     SqliteConnection,
 };
 use scrypt::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Scrypt,
 };
+use std::collections::HashMap;
 
-// use crate::schema::{file, token};
+use crate::errors;
 use crate::schema::{auth, file, token};
 
 diesel_migrations::embed_migrations!("./migrations/");
