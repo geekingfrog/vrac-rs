@@ -19,7 +19,7 @@ use scrypt::Scrypt;
 use std::path::{Path, PathBuf};
 use tokio_util::codec;
 
-use multer::{Constraints, Multipart, SizeLimit};
+use multer::{Constraints, Field, Multipart, SizeLimit};
 
 use anyhow::Context;
 
@@ -323,7 +323,7 @@ impl<'r> request::FromRequest<'r> for AdminUser {
 }
 
 #[rocket::post("/f/<tok>", data = "<data>")]
-async fn upload_file<'a, 'o>(
+async fn upload_files<'a, 'o>(
     tok: &str,
     conn: VracDbConn,
     data: Data<'_>,
@@ -373,92 +373,18 @@ async fn upload_file<'a, 'o>(
         .context("Cannot create temporary file")?;
 
     while let Some(mut field) = multipart.next_field().await.context("multipart issue")? {
-        let mut file_path = dest_path.to_path_buf();
-        let mut file_size = ByteUnit::Mebibyte(0);
-        match field.name().or_else(|| field.file_name()) {
-            Some(file_name) => {
-                if file_name.is_empty() {
-                    // avoid creating empty files
-                    continue;
-                } else {
-                    file_path.push(file_name);
-                }
+        match upload_file(&conn, write_lock, &mut field, &dest_path, dbtoken.id).await {
+            Ok(_) => (),
+            Err(errors::VracError::FileSizeExceeded) => {
+                let redir = Redirect::to(rocket::uri!(get_file(&tok)));
+                let msg = format!(
+                    "File size exceeded, the maximum total size is {}",
+                    max_stream_size
+                );
+                return Ok(Some(Flash::error(redir, msg)));
             }
-            None => continue,
-        };
-
-        log::info!(
-            "going to write some bytes to {}",
-            &file_path.to_string_lossy(),
-        );
-
-        let db_file = {
-            let _guard = write_lock.0.lock().await;
-            let create_file = db::CreateFile {
-                token_id: dbtoken.id,
-                name: field.file_name().map(|s| s.to_string()),
-                path: file_path.clone(),
-                content_type: field.content_type().map(|ct| ct.to_string()),
-            };
-            conn.run(move |c| db::create_file(c, create_file)).await?
-        };
-
-        let file_to_write = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&file_path)
-            .await
-            .with_context(|| {
-                format!(
-                    "Error opening file {} for write",
-                    &file_path.to_string_lossy()
-                )
-            })?;
-        let mut writer = file_to_write;
-
-        // TODO do something to cleanup the file on disk if there is an error.
-        log::debug!("coucou for field {:?}", field);
-        while let Some(chunk) = field.chunk().await.transpose() {
-            let mut chunk = match chunk {
-                Ok(c) => c,
-                Err(err) => {
-                    // TODO: here I can catch the exact error for size exceeded
-                    log::error!("got an error while reading a chunk: {:?}", err);
-                    let redir = Redirect::to(rocket::uri!(get_file(&tok)));
-                    return Ok(Some(Flash::error(redir, "kaboom")));
-                }
-            };
-
-            file_size = file_size + chunk.len().bytes();
-            log::debug!(
-                "written so far: {}  (wrote {})",
-                file_size,
-                chunk.len().bytes()
-            );
-            writer.write_all_buf(&mut chunk).await.with_context(|| {
-                format!("Error writing to file {}", &file_path.to_string_lossy())
-            })?;
-            writer.flush().await.unwrap();
+            Err(err) => return Err(err),
         }
-        writer
-            .shutdown()
-            .await
-            .with_context(|| format!("Error writing to file {}", &file_path.to_string_lossy()))?;
-        let file_size_mib = file_size.as_u64();
-
-        {
-            let _guard = write_lock.0.lock().await;
-            conn.run(move |c| db::complete_upload(c, db_file.id))
-                .await?;
-        }
-
-        log::info!(
-            "for file {} wrote {} - {} MiB",
-            &file_path.to_string_lossy(),
-            file_size,
-            file_size_mib
-        );
     }
 
     let tok_path = dbtoken.path.clone();
@@ -469,6 +395,133 @@ async fn upload_file<'a, 'o>(
     }
     let redir = Redirect::to(rocket::uri!(get_file(&tok_path)));
     Ok(Some(Flash::success(redir, "File uploaded.")))
+}
+
+async fn upload_file<'a>(
+    conn: &VracDbConn,
+    write_lock: &rocket::State<WriteLock>,
+    field: &mut Field<'a>,
+    dest_path: &Path,
+    token_id: i32,
+) -> errors::Result<()> {
+    let mut file_path = dest_path.to_path_buf();
+    match field.name().or_else(|| field.file_name()) {
+        Some(file_name) => {
+            if file_name.is_empty() {
+                // avoid creating empty files
+                return Ok(());
+            } else {
+                file_path.push(format!("file-{token_id:04}"));
+            }
+        }
+        None => return Ok(()),
+    };
+
+    log::info!(
+        "going to write some bytes to {}",
+        &file_path.to_string_lossy(),
+    );
+
+    let db_file = {
+        let _guard = write_lock.0.lock().await;
+        let create_file = db::CreateFile {
+            token_id,
+            name: field.file_name().map(|s| s.to_string()),
+            path: file_path.clone(),
+            content_type: field.content_type().map(|ct| ct.to_string()),
+        };
+        conn.run(move |c| db::create_file(c, create_file)).await?
+    };
+
+    let file_path_string = file_path.to_string_lossy().to_string();
+    let file_size = match write_file(field, file_path).await {
+        Ok(size) => size,
+        Err(err) => {
+            // something went wrong, attempt to cleanup everything before
+            // returning this error.
+            let r = conn.run(move |c| db::abort_upload(c, db_file.id)).await;
+            log_err("Error deleting file in the DB", r);
+
+            log_err(
+                &format!("Error deleting the file at {file_path_string}"),
+                tokio::fs::remove_file(&file_path_string).await,
+            );
+
+            return Err(err);
+        }
+    };
+
+    {
+        let _guard = write_lock.0.lock().await;
+        conn.run(move |c| db::complete_upload(c, db_file.id))
+            .await?;
+    }
+
+    log::info!(
+        "for file {} wrote {} - {} MiB",
+        file_path_string,
+        file_size,
+        file_size.as_u64()
+    );
+
+    Ok(())
+}
+
+/// Discard a Result, if it's an error, log it as error prepended with the given message.
+fn log_err<A, E>(msg: &str, err: Result<A, E>)
+where
+    E: std::fmt::Debug,
+{
+    match err {
+        Ok(_) => (),
+        Err(err) => log::error!("{msg} - {err:?}"),
+    }
+}
+
+/// read a given field in the multipart body, and attempt to write it to disk.
+async fn write_file(field: &mut Field<'_>, file_path: PathBuf) -> errors::Result<ByteUnit> {
+    let file_path_string = file_path.to_string_lossy().to_string();
+
+    let mut writer = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&file_path)
+        .await
+        .with_context(|| format!("Error opening file {} for write", file_path_string))?;
+
+    // let mut writer = TempFile::new(file_path.to_path_buf())
+    //     .await
+    //     .with_context(|| format!("Error opening file {} for write", file_path_string))?;
+
+    let mut file_size = ByteUnit::Mebibyte(0);
+    while let Some(chunk) = field.chunk().await.transpose() {
+        let mut chunk = match chunk {
+            Ok(c) => c,
+            Err(err) => {
+                // TODO: here I can catch the exact error for size exceeded
+                log::error!("got an error while reading a chunk: {:?}", err);
+                return Err(errors::VracError::FileSizeExceeded);
+            }
+        };
+
+        file_size = file_size + chunk.len().bytes();
+        log::debug!(
+            "written so far: {}  (wrote {})",
+            file_size,
+            chunk.len().bytes()
+        );
+        writer
+            .write_all_buf(&mut chunk)
+            .await
+            .with_context(|| format!("Error writing to file {}", file_path_string))?;
+        writer.flush().await.unwrap();
+    }
+    writer
+        .shutdown()
+        .await
+        .with_context(|| format!("Error writing to file {}", file_path_string))?;
+    Ok(file_size)
 }
 
 #[database("sqlite_vrac")]
@@ -488,7 +541,7 @@ fn build_app() -> rocket::Rocket<rocket::Build> {
                 gen_token_post,
                 gen_token_post_pecore,
                 get_file,
-                upload_file,
+                upload_files,
                 download_file
             ],
         )

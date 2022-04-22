@@ -181,10 +181,15 @@ pub fn create_token(
     use token::dsl;
 
     conn.transaction(|| {
+        let now = chrono::Utc::now().naive_utc();
         let existing_count: i64 = token::table
             .select(diesel::dsl::count_star())
-            .filter(dsl::status.eq_any(vec![TokenStatus::Fresh, TokenStatus::Used]))
             .filter(dsl::path.eq(&tok.path))
+            .filter(
+                token::token_expires_at
+                    .ge(now)
+                    .or(token::content_expires_at.ge(now)),
+            )
             .first(conn)?;
 
         if existing_count > 0 {
@@ -259,6 +264,33 @@ pub fn get_expired_files(
     Ok(result)
 }
 
+/// mark all expired token as deleted and returns their paths.
+pub fn delete_expired_tokens(
+    conn: &SqliteConnection,
+) -> std::result::Result<Vec<String>, Box<dyn std::error::Error>> {
+    let now = chrono::Utc::now().naive_utc();
+
+    let to_delete: Vec<Token> = token::table
+        .filter(
+            token::dsl::token_expires_at
+                .le(now)
+                .or(token::dsl::content_expires_at.le(now)),
+        )
+        .filter(token::dsl::deleted_at.is_null())
+        .load(conn)?;
+
+    let ids_to_del = to_delete.iter().map(|t| t.id);
+    diesel::update(token::dsl::token.filter(token::dsl::id.eq_any(ids_to_del)))
+        .set((
+            token::dsl::deleted_at.eq(now),
+            token::dsl::status.eq(TokenStatus::Deleted),
+        ))
+        .execute(conn)?;
+
+    let deleted_paths = to_delete.into_iter().map(|t| t.path).collect();
+    Ok(deleted_paths)
+}
+
 /// mark the given tokens and their associated files as deleted in the DB
 /// Returns the total number of deleted files.
 pub fn delete_files(
@@ -325,7 +357,7 @@ pub fn create_file(conn: &SqliteConnection, file: CreateFile) -> errors::Result<
             .execute(conn)?;
 
         if n_inserted == 0 {
-            Err(anyhow!("Didn't insert file: {:?}", create_file))?
+            Err(anyhow!("Didn't insert file: {:?}", create_file).into())
         } else {
             let inserted_file = dsl::file.order(file::id.desc()).first(conn)?;
             Ok(inserted_file)
@@ -341,8 +373,19 @@ pub fn complete_upload(conn: &SqliteConnection, file_id: i32) -> errors::Result<
     Ok(())
 }
 
+/// remove the corresponding row in the file table. When something goes wrong
+/// during the upload, this should be used to cleanup afterward.
+pub fn abort_upload(conn: &SqliteConnection, file_id: i32) -> errors::Result<()> {
+    use crate::schema::file::dsl;
+    diesel::delete(dsl::file.find(file_id)).execute(conn)?;
+    Ok(())
+}
+
 pub fn get_files(conn: &SqliteConnection, token: &Token) -> errors::Result<Vec<File>> {
-    let files = File::belonging_to(token).load(conn)?;
+    use crate::schema::file::dsl;
+    let files = File::belonging_to(token)
+        .filter(dsl::file_upload_status.eq(FileUploadStatus::Completed))
+        .load(conn)?;
     Ok(files)
 }
 

@@ -25,6 +25,9 @@ pub enum VracError {
     #[error("User already exists: {0}")]
     UserAlreadyExists(String),
 
+    #[error("File size exceeded")]
+    FileSizeExceeded,
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
