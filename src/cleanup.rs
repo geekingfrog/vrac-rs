@@ -33,6 +33,10 @@ pub fn cleanup_once(conn: &SqliteConnection) -> Result<(), Box<dyn Error>> {
     log::info!("deleted a total of {n} files for {} tokens", n_tok);
 
     let del_token_paths = db::delete_expired_tokens(conn)?;
+    for path in &del_token_paths {
+        std::fs::remove_dir_all(path)?;
+    }
+
     log::info!(
         "Marked {} tokens as deleted for paths: {:?}",
         del_token_paths.len(),
