@@ -20,9 +20,10 @@ body {
 
     {{#if this.is_image}}
     <img alt="{{name}}" src="{{dl_uri}}">
-    {{else}}
-    <a href="{{dl_uri}}" download="{{name}}">Download {{name}}</a> ({{content_type}})
+    <br>
     {{/if}}
+
+    <a href="{{dl_uri}}" download="{{name}}">Download {{name}}</a> ({{content_type}})
 
     </p>
     {{/each}}
