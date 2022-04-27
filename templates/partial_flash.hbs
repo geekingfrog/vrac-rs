@@ -1,6 +1,9 @@
 {{! `this` is an optional FlashData object }}
 {{#if this}}
 <p style="color:{{this.color}}">
-{{this.message}}
+{{! unescape the html in case the flash contains a link to somewhere
+  this happens when trying to create a token which is already taken
+}}
+{{{this.message}}}
 </p>
 {{/if}}

@@ -115,6 +115,15 @@ async fn gen_token_post<'a, 'o>(
             let redir = response::Redirect::to(rocket::uri!(get_file(new_token.path)));
             Ok(Flash::success(redir, "Token created"))
         }
+        Err(errors::VracError::TokenAlreadyExists(path)) => {
+            let redir = Redirect::to(rocket::uri!(gen_token_get()));
+            let msg = format!(
+                r#"Token already exists at <a href="{}">{}</a>"#,
+                rocket::uri!(get_file(&path)),
+                &path,
+            );
+            Ok(Flash::error(redir, msg))
+        }
         Err(err) => {
             let redir = Redirect::to(rocket::uri!(gen_token_get()));
             Ok(Flash::error(redir, format!("{err}")))
@@ -150,7 +159,7 @@ async fn get_file(
     flash: Option<FlashMessage<'_>>,
 ) -> errors::Result<Option<Template>> {
     let tokstr = tok.to_string();
-    let tok: Option<db::Token> = conn.run(|c| db::get_valid_token(c, tokstr)).await?;
+    let tok: Option<db::Token> = conn.run(move |c| db::get_valid_token(c, &tokstr)).await?;
 
     match tok {
         None => Ok(None),
@@ -204,7 +213,7 @@ async fn download_file(
 ) -> errors::Result<Option<(http::ContentType, fs::File)>> {
     let file: Option<db::File> = conn
         .run(move |c| {
-            let token = db::get_valid_token(c, tok_id)?;
+            let token = db::get_valid_token(c, &tok_id)?;
             let token = match token {
                 Some(t) => t,
                 None => return Ok(None),
@@ -331,7 +340,7 @@ async fn upload_files<'a, 'o>(
 ) -> errors::Result<Option<Flash<Redirect>>> {
     log::info!("vrac config is: {vrac_config:?}");
     let tokstr = tok.to_string();
-    let dbtoken: db::Token = match conn.run(|c| db::get_valid_token(c, tokstr)).await? {
+    let dbtoken: db::Token = match conn.run(move |c| db::get_valid_token(c, &tokstr)).await? {
         // TODO would be better to redirect to get_file or something along these lines?
         // may not work for API usage though
         None => return Ok(None),
@@ -365,7 +374,11 @@ async fn upload_files<'a, 'o>(
     // some chosen value of tok.path
     // This is fairly minimal though since only admins/owner should have the
     // ability to generate tokens.
-    let dest_path = vrac_config.root_path.as_path().join(&dbtoken.path);
+    let dest_path = vrac_config
+        .root_path
+        .as_path()
+        .join(&dbtoken.path)
+        .join(format!("-{:04}", dbtoken.id));
     fs::create_dir_all(&dest_path)
         .await
         .context("Cannot create temporary file")?;

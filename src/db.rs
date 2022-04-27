@@ -223,7 +223,7 @@ pub fn create_token(
 /// that the associated content hasn't expired yet
 pub fn get_valid_token(
     conn: &SqliteConnection,
-    token_path: String,
+    token_path: &str,
 ) -> std::result::Result<Option<Token>, diesel::result::Error> {
     // there should be at most one token with a given path in status fresh or used.
     let now = chrono::Utc::now().naive_utc();
@@ -259,6 +259,17 @@ pub fn get_expired_files(
     Ok(result)
 }
 
+pub fn delete_token(conn: &SqliteConnection, token_id: i32) -> Result<(), errors::VracError> {
+    let now = chrono::Utc::now().naive_utc();
+    diesel::update(token::dsl::token.find(token_id))
+        .set((
+            token::dsl::deleted_at.eq(now),
+            token::dsl::status.eq(TokenStatus::Deleted),
+        ))
+        .execute(conn)?;
+    Ok(())
+}
+
 /// mark all expired token as deleted and returns their paths.
 pub fn delete_expired_tokens(
     conn: &SqliteConnection,
@@ -290,19 +301,19 @@ pub fn delete_expired_tokens(
 /// Returns the total number of deleted files.
 pub fn delete_files(
     conn: &SqliteConnection,
-    tokens: &[Token],
+    token_ids: &[i32],
 ) -> std::result::Result<usize, Box<dyn std::error::Error>> {
     let deleted_file_count = conn.transaction::<_, diesel::result::Error, _>(|| {
         // use file::dsl::file;
         let mut deleted_file_count = 0;
 
         let now = chrono::Utc::now().naive_utc();
-        for tok in tokens {
+        for tok_id in token_ids {
             deleted_file_count +=
-                diesel::update(file::dsl::file.filter(file::dsl::token_id.eq(tok.id)))
+                diesel::update(file::dsl::file.filter(file::dsl::token_id.eq(tok_id)))
                     .set(file::dsl::deleted_at.eq(now))
                     .execute(conn)?;
-            diesel::update(token::dsl::token.find(tok.id))
+            diesel::update(token::dsl::token.find(tok_id))
                 .set((
                     token::dsl::deleted_at.eq(now),
                     token::dsl::status.eq(TokenStatus::Deleted),

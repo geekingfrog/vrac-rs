@@ -28,18 +28,13 @@ pub fn cleanup_once(conn: &SqliteConnection) -> Result<(), Box<dyn Error>> {
                 },
             }
         }
-        n += db::delete_files(conn, &[token])?;
+        n += db::delete_files(conn, &[token.id])?;
     }
     log::info!("deleted a total of {n} files for {} tokens", n_tok);
 
     let del_token_paths = db::delete_expired_tokens(conn)?;
     for path in &del_token_paths {
-        match std::fs::remove_dir_all(&path) {
-            Ok(_) => (),
-            // if for some reason, the directory isn't there, ignore the error
-            Err(err) if err.kind() == ErrorKind::NotFound => (),
-            Err(err) => return Err(err.into()),
-        }
+        remove_token_dir(path)?;
     }
 
     log::info!(
@@ -49,4 +44,22 @@ pub fn cleanup_once(conn: &SqliteConnection) -> Result<(), Box<dyn Error>> {
     );
 
     Ok(())
+}
+
+/// remove the directory at the given path. If the path doesn't exist
+/// it will log the error but returns a success otherwise
+pub fn remove_token_dir(path: &str) -> Result<(), Box<dyn Error>> {
+    // TODO add some safeguard there to avoid removing stuff we shouldn't
+    match std::fs::remove_dir_all(&path) {
+        Ok(_) => Ok(()),
+        // if for some reason, the directory isn't there, ignore the error
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            log::error!(
+                "Attempted to cleanup token at path {} but didn't find anything",
+                &path
+            );
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
 }
