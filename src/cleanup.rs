@@ -50,6 +50,7 @@ pub fn cleanup_once(conn: &SqliteConnection) -> Result<(), Box<dyn Error>> {
 /// it will log the error but returns a success otherwise
 pub fn remove_token_dir(path: &str) -> Result<(), Box<dyn Error>> {
     // TODO add some safeguard there to avoid removing stuff we shouldn't
+    log::info!("remove_dir_all for {path}");
     match std::fs::remove_dir_all(&path) {
         Ok(_) => Ok(()),
         // if for some reason, the directory isn't there, ignore the error
