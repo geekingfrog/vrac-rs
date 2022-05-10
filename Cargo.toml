@@ -25,6 +25,7 @@ thiserror = "1.0.30"
 tokio = "1.17.0"
 tokio-util = { version = "0.7.0", features = ["codec"] }
 env_logger = "*"
+multipart = { version = "0.18.0", default-features = false, features = ["client", "hyper"] }
 
 [[bin]]
 name = "vrac"
@@ -37,3 +38,7 @@ path = "src/bin/admin.rs"
 [[bin]]
 name = "teststuff"
 path = "src/bin/teststuff.rs"
+
+[[bin]]
+name = "vrac-upload"
+path = "src/bin/upload.rs"

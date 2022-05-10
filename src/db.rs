@@ -34,6 +34,13 @@ pub struct Token {
     pub deleted_at: Option<NaiveDateTime>,
 }
 
+impl Token {
+    /// the name of the associated directory under which files are saved.
+    pub fn dir_name(&self) -> String {
+        format!("{}-{:05}", self.path, self.id)
+    }
+}
+
 #[derive(Debug)]
 pub struct CreateToken {
     pub path: String,
@@ -181,9 +188,11 @@ pub fn create_token(
             .select(diesel::dsl::count_star())
             .filter(dsl::path.eq(&tok.path))
             .filter(
-                token::token_expires_at
-                    .ge(now)
-                    .or(token::content_expires_at.ge(now)),
+                token::deleted_at.is_null().and(
+                    token::token_expires_at
+                        .ge(now)
+                        .or(token::content_expires_at.ge(now)),
+                ),
             )
             .first(conn)?;
 
@@ -230,9 +239,11 @@ pub fn get_valid_token(
     let tok: Vec<Token> = token::table
         .filter(token::path.eq(token_path))
         .filter(
-            token::token_expires_at
-                .ge(now)
-                .or(token::content_expires_at.ge(now)),
+            token::deleted_at.is_null().and(
+                token::token_expires_at
+                    .ge(now)
+                    .or(token::content_expires_at.ge(now)),
+            ),
         )
         .load(conn)?;
     Ok(tok.into_iter().next())
@@ -270,10 +281,10 @@ pub fn delete_token(conn: &SqliteConnection, token_id: i32) -> Result<(), errors
     Ok(())
 }
 
-/// mark all expired token as deleted and returns their paths.
+/// mark all expired token as deleted and returns them
 pub fn delete_expired_tokens(
     conn: &SqliteConnection,
-) -> std::result::Result<Vec<String>, Box<dyn std::error::Error>> {
+) -> std::result::Result<Vec<Token>, Box<dyn std::error::Error>> {
     let now = chrono::Utc::now().naive_utc();
 
     let to_delete: Vec<Token> = token::table
@@ -293,8 +304,7 @@ pub fn delete_expired_tokens(
         ))
         .execute(conn)?;
 
-    let deleted_paths = to_delete.into_iter().map(|t| t.path).collect();
-    Ok(deleted_paths)
+    Ok(to_delete)
 }
 
 /// mark the given tokens and their associated files as deleted in the DB

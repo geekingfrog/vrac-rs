@@ -22,20 +22,7 @@ use anyhow::Context;
 use vrac::cleanup;
 use vrac::db;
 use vrac::errors;
-
-#[derive(Debug, Deserialize)]
-#[serde(crate = "rocket::serde")]
-struct VracConfig {
-    root_path: PathBuf,
-}
-
-impl Default for VracConfig {
-    fn default() -> Self {
-        Self {
-            root_path: std::env::current_dir().expect("Cannot access current dir???"),
-        }
-    }
-}
+use vrac::conf::VracConfig;
 
 #[rocket::get("/")]
 fn index<'r>() -> impl Responder<'r, 'static> {
@@ -374,14 +361,12 @@ async fn upload_files<'a, 'o>(
     // some chosen value of tok.path
     // This is fairly minimal though since only admins/owner should have the
     // ability to generate tokens.
-    let dest_path = vrac_config
-        .root_path
-        .as_path()
-        .join(&dbtoken.path)
-        .join(format!("-{:04}", dbtoken.id));
+    let dest_path = vrac_config.root_path.as_path().join(dbtoken.dir_name());
     fs::create_dir_all(&dest_path)
         .await
         .context("Cannot create temporary file")?;
+
+    log::info!("uploading file to {}", dest_path.to_string_lossy());
 
     while let Some(mut field) = multipart.next_field().await.context("multipart issue")? {
         match upload_file(&conn, write_lock, &mut field, &dest_path, dbtoken.id).await {
@@ -566,6 +551,8 @@ fn build_app() -> rocket::Rocket<rocket::Build> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = build_app().ignite().await?;
 
+    let root_path: String = app.figment().extract_inner("root_path")?;
+
     let pool = VracDbConn::get_one(&app)
         .await
         .ok_or("Cannot access connection pool")?;
@@ -575,9 +562,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok::<_, Box<dyn std::error::Error>>(())
     };
 
-    let background_job = async {
-        pool.run(|c| cleanup::cleanup_once(c).map_err(|err| format!("{:?}", err)))
-            .await?;
+    let background_job = async move {
+        pool.run(move |c| {
+            cleanup::cleanup_once(c, root_path.into()).map_err(|err| format!("{:?}", err))
+        })
+        .await?;
         Ok(())
     };
 

@@ -2,6 +2,7 @@ use clap::Parser;
 use std::{env::VarError, error::Error};
 
 use vrac::cleanup;
+use vrac::conf::VracConfig;
 use vrac::db;
 
 type AdminResult<R> = std::result::Result<R, Box<dyn Error>>;
@@ -57,7 +58,8 @@ fn main() -> AdminResult<()> {
 fn cleanup(database_url: Option<String>) -> AdminResult<()> {
     let db_url = get_db_url(database_url)?;
     let conn = db::connect(&db_url)?;
-    cleanup::cleanup_once(&conn)?;
+    let root_path = VracConfig::from_rocket_config()?.root_path;
+    cleanup::cleanup_once(&conn, root_path)?;
     Ok(())
 }
 
@@ -73,15 +75,22 @@ fn delete_token(database_url: Option<String>, token_path: String) -> AdminResult
     match db::get_valid_token(&conn, &token_path)? {
         Some(tok) => {
             let n = db::delete_files(&conn, &[tok.id])?;
+            let root_path = VracConfig::from_rocket_config()?.root_path;
+            let token_path = root_path.join(tok.dir_name());
             db::delete_token(&conn, tok.id)?;
-            cleanup::remove_token_dir(&tok.path)?;
-            log::info!("Deleted {n} files for token at path {}", tok.path);
+            cleanup::remove_token_dir(&token_path)?;
+            log::info!(
+                "Deleted {n} files for token at path {}",
+                token_path.to_string_lossy()
+            );
         }
         None => {
             log::info!("No token found at path {token_path}");
+            let root_path = VracConfig::from_rocket_config()?.root_path;
+            let token_path = root_path.join(token_path);
             cleanup::remove_token_dir(&token_path)?;
-            log::info!("Removed everything under {token_path}");
-        },
+            log::info!("Removed everything under {}", token_path.to_string_lossy());
+        }
     };
     Ok(())
 }
